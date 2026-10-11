@@ -18,8 +18,8 @@
   var refreshSavedFilesButton = document.getElementById("refreshSavedFiles");
   var SAVE_DIR_DB = "option-excel-app";
   var SAVE_DIR_STORE = "handles";
-  var SAVE_DIR_KEY = "save-data";
-  var EXCEL_DIR_KEY = "excel-list";
+  var APP_DIR_KEY = "app-root";
+  var appDirHandle = null;
   var saveDirHandle = null;
   var excelDirHandle = null;
   var saveApi = false;
@@ -209,10 +209,6 @@
     });
   }
 
-  function storeSaveDirHandle(handle) {
-    return storeHandle(SAVE_DIR_KEY, handle);
-  }
-
   function readStoredHandle(key) {
     return openSaveDirDb().then(function (db) {
       return new Promise(function (resolve, reject) {
@@ -258,9 +254,10 @@
 
   function setSaveFolderUiLinked(name) {
     saveFolderStatus.textContent =
-      "保存先: アプリ内の saveデータ" + (name && name !== "saveデータ" ? "（" + name + "）" : "") + "。saveする でここに保存します。";
+      "保存先はアプリフォルダ内です。途中保存は saveデータ、Excelは 仕様書一覧。" +
+      (name ? "（" + name + "）" : "");
     linkSaveFolderButton.hidden = saveApi;
-    linkSaveFolderButton.textContent = "saveデータフォルダを変更";
+    linkSaveFolderButton.textContent = "アプリフォルダを変更";
     savedFileSelect.hidden = false;
     loadSavedFileButton.hidden = false;
     refreshSavedFilesButton.hidden = false;
@@ -269,8 +266,9 @@
   function setSaveFolderUiUnlinked(message) {
     saveFolderStatus.textContent =
       message ||
-      "初回だけ、このアプリ内の saveデータ フォルダを選んでください。選ぶと saveデータ に保存できます。";
-    linkSaveFolderButton.textContent = "saveデータフォルダを指定";
+      "初回だけ、index.html が入っているこのアプリのフォルダを選んでください。bat は不要です。";
+    linkSaveFolderButton.hidden = false;
+    linkSaveFolderButton.textContent = "このアプリのフォルダを指定";
     savedFileSelect.hidden = true;
     loadSavedFileButton.hidden = true;
     refreshSavedFilesButton.hidden = true;
@@ -305,14 +303,16 @@
     }
     var ok = await ensureSaveDirPermission(saveDirHandle, "read");
     if (!ok) {
+      appDirHandle = null;
       saveDirHandle = null;
-      setSaveFolderUiUnlinked("saveデータ フォルダへのアクセスが切れました。もう一度指定してください。");
+      excelDirHandle = null;
+      setSaveFolderUiUnlinked("フォルダへのアクセスが切れました。もう一度、このアプリのフォルダを指定してください。");
       return;
     }
     fillFileSelect(await listSavedJsonFiles(saveDirHandle));
   }
 
-  async function useSaveDirHandle(handle) {
+  async function useAppDirHandle(handle) {
     if (!handle) {
       return false;
     }
@@ -320,53 +320,62 @@
     if (!ok) {
       return false;
     }
-    saveDirHandle = handle;
-    await storeSaveDirHandle(handle);
+    try {
+      await handle.getFileHandle("index.html");
+    } catch (error) {
+      showErrors(["index.html があるフォルダ（このアプリのフォルダ）を選んでください。"]);
+      return false;
+    }
+    appDirHandle = handle;
+    saveDirHandle = await handle.getDirectoryHandle("saveデータ", { create: true });
+    excelDirHandle = await handle.getDirectoryHandle("仕様書一覧", { create: true });
+    await storeHandle(APP_DIR_KEY, handle);
     setSaveFolderUiLinked(handle.name);
     await refreshSavedFileList();
     return true;
   }
 
-  async function useExcelDirHandle(handle) {
-    if (!handle) {
+  async function chooseAppFolder() {
+    if (!supportsSaveFolder()) {
+      showErrors(["Edge または Chrome で index.html を開いてください。"]);
       return false;
-    }
-    var ok = await ensureSaveDirPermission(handle, "readwrite");
-    if (!ok) {
-      return false;
-    }
-    excelDirHandle = handle;
-    await storeHandle(EXCEL_DIR_KEY, handle);
-    return true;
-  }
-
-  async function ensureExcelDirHandle() {
-    if (excelDirHandle && (await ensureSaveDirPermission(excelDirHandle, "readwrite"))) {
-      return true;
     }
     try {
-      var stored = await readStoredHandle(EXCEL_DIR_KEY);
-      if (stored && (await useExcelDirHandle(stored))) {
+      var handle = await window.showDirectoryPicker({
+        id: "option-excel-app-root",
+        mode: "readwrite",
+      });
+      if (await useAppDirHandle(handle)) {
+        showErrors([]);
+        setStatus("このアプリのフォルダを使えました。saveデータ と 仕様書一覧 に保存します。");
+        return true;
+      }
+    } catch (error) {
+      if (error && error.name !== "AbortError") {
+        showErrors([error.message || "フォルダを指定できませんでした。"]);
+      }
+    }
+    return false;
+  }
+
+  async function ensureAppFolder() {
+    if (saveApi) {
+      return true;
+    }
+    if (appDirHandle && saveDirHandle && excelDirHandle) {
+      if (await ensureSaveDirPermission(appDirHandle, "readwrite")) {
+        return true;
+      }
+    }
+    try {
+      var stored = await readStoredHandle(APP_DIR_KEY);
+      if (stored && (await useAppDirHandle(stored))) {
         return true;
       }
     } catch (error) {
       // ignore
     }
-    if (!supportsSaveFolder()) {
-      return false;
-    }
-    try {
-      var handle = await window.showDirectoryPicker({
-        id: "option-excel-spec-list",
-        mode: "readwrite",
-      });
-      return useExcelDirHandle(handle);
-    } catch (error) {
-      if (error && error.name === "AbortError") {
-        return false;
-      }
-      throw error;
-    }
+    return chooseAppFolder();
   }
 
   async function writeExcelToHandle(filename, buffer) {
@@ -376,30 +385,8 @@
     await writable.close();
   }
 
-  async function chooseSaveFolder() {
-    if (!supportsSaveFolder()) {
-      showErrors([
-        "このブラウザでは saveデータ フォルダへ直接保存できません。Edge または Chrome で開くか、別ファイルから読み込む を使ってください。",
-      ]);
-      return;
-    }
-    try {
-      var handle = await window.showDirectoryPicker({
-        id: "option-excel-save-data",
-        mode: "readwrite",
-        startIn: "documents",
-      });
-      if (!(await useSaveDirHandle(handle))) {
-        showErrors(["saveデータ フォルダへのアクセスが許可されませんでした。"]);
-      } else {
-        showErrors([]);
-        setStatus("saveデータ フォルダを使えるようにしました。");
-      }
-    } catch (error) {
-      if (error && error.name !== "AbortError") {
-        showErrors([error.message || "saveデータ フォルダを指定できませんでした。"]);
-      }
-    }
+  function chooseSaveFolder() {
+    return chooseAppFolder();
   }
 
   async function probeSaveApi() {
@@ -436,22 +423,19 @@
       return;
     }
     if (!supportsSaveFolder()) {
-      setSaveFolderUiUnlinked(
-        "開く.bat から起動すると、saveする でアプリ内の saveデータ フォルダに保存できます。"
-      );
+      setSaveFolderUiUnlinked("Edge または Chrome で index.html を開いてください。");
       linkSaveFolderButton.hidden = true;
       return;
     }
     try {
-      var stored = await readStoredHandle(SAVE_DIR_KEY);
-      if (stored && (await useSaveDirHandle(stored))) {
+      var stored = await readStoredHandle(APP_DIR_KEY);
+      if (stored && (await useAppDirHandle(stored))) {
         return;
       }
     } catch (error) {
       // ignore restore errors
     }
-    setSaveFolderUiUnlinked("開く.bat から起動すると、saveする でアプリ内の saveデータ フォルダに保存できます。");
-    linkSaveFolderButton.hidden = true;
+    setSaveFolderUiUnlinked();
   }
 
   function buildDocumentData() {
@@ -526,27 +510,18 @@
         return;
       }
     }
-    if (saveDirHandle) {
-      try {
-        var ok = await ensureSaveDirPermission(saveDirHandle, "readwrite");
-        if (!ok) {
-          saveDirHandle = null;
-          setSaveFolderUiUnlinked("saveデータ フォルダへのアクセスが切れました。開く.bat から起動してください。");
-          showErrors(["saveデータ フォルダへ保存できませんでした。開く.bat から起動してください。"]);
-          return;
-        }
-        var savedName = await writeDocumentToSaveFolder(documentData);
-        await refreshSavedFileList();
-        savedFileSelect.value = savedName;
-        setStatus("saveデータ に保存しました: " + savedName);
-        return;
-      } catch (error) {
-        showErrors([error && error.message ? error.message : "saveデータ フォルダへ保存できませんでした。"]);
-        return;
-      }
+    if (!(await ensureAppFolder())) {
+      showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。"]);
+      return;
     }
-
-    showErrors(["アプリ内の saveデータ に保存するには、開く.bat をダブルクリックして起動してください。"]);
+    try {
+      var savedName = await writeDocumentToSaveFolder(documentData);
+      await refreshSavedFileList();
+      savedFileSelect.value = savedName;
+      setStatus("saveデータ に保存しました: " + savedName);
+    } catch (error) {
+      showErrors([error && error.message ? error.message : "saveデータ フォルダへ保存できませんでした。"]);
+    }
   }
 
   function applyLoaded(data) {
@@ -645,8 +620,8 @@
       }
       return;
     }
-    if (!saveDirHandle) {
-      showErrors(["saveデータ フォルダが指定されていません。開く.bat から起動してください。"]);
+    if (!(await ensureAppFolder()) || !saveDirHandle) {
+      showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。"]);
       return;
     }
     try {
@@ -701,14 +676,12 @@
         setStatus("仕様書一覧 に保存しました: " + filename);
         return;
       }
-      if (await ensureExcelDirHandle()) {
+      if (await ensureAppFolder()) {
         await writeExcelToHandle(filename, buffer);
         setStatus("仕様書一覧 に保存しました: " + filename);
         return;
       }
-      showErrors([
-        "Downloads には保存しません。開く.bat から起動するか、表示されたフォルダ選択でアプリ内の「仕様書一覧」を選んでください。",
-      ]);
+      showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。Excelは Downloads には保存しません。"]);
     } catch (error) {
       showErrors([error && error.message ? error.message : "Excelを作成できませんでした。"]);
     }

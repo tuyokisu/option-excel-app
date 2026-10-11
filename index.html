@@ -298,8 +298,8 @@
       <div id="errors" role="alert" hidden></div>
       <p id="status" hidden></p>
       <div class="save-load">
-        <button id="linkSaveFolder" type="button" hidden>saveデータフォルダを指定</button>
-        <p id="saveFolderStatus">保存先はアプリ内の saveデータ フォルダです。</p>
+        <button id="linkSaveFolder" type="button">このアプリのフォルダを指定</button>
+        <p id="saveFolderStatus">初回だけ、index.html が入っているフォルダを選んでください。bat は使いません。</p>
         <select id="savedFileSelect" hidden aria-label="保存済み一覧">
           <option value="">保存済みを選ぶ</option>
         </select>
@@ -317,7 +317,7 @@
     </section>
 
     <aside class="note">
-      <p>会社のPCでは 開く.bat をダブルクリックしてください。Excelは Downloads ではなく、アプリ内の 仕様書一覧 フォルダに保存されます。マクロは使用していません。</p>
+      <p>フォルダごとPCにコピーし、index.html を Edge または Chrome で開いてください。初回だけこのアプリのフォルダを指定すると、saveデータ と 仕様書一覧 に保存できます。bat は不要です。</p>
     </aside>
   </main>
   <script src="excel-builder.js"></script>
