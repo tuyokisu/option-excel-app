@@ -167,6 +167,113 @@
     };
   }
 
+  function splitOptionCodes(text, maxRows) {
+    var limit = Number(maxRows);
+    if (ALLOWED_INPUT_ROWS.indexOf(limit) === -1) {
+      limit = 300;
+    }
+    if (trimText(text) === "") {
+      return [];
+    }
+    var normalized = String(text == null ? "" : text)
+      .replace(/、/g, ",")
+      .replace(/，/g, ",");
+    var parts = normalized.split(",");
+    var tokens = [];
+    var i;
+    for (i = 0; i < parts.length && tokens.length < limit; i += 1) {
+      tokens.push(trimText(parts[i]));
+    }
+    return tokens;
+  }
+
+  function previewOptionSelection(source) {
+    var input = source || {};
+    var maxRows = Number(input.inputRows);
+    if (ALLOWED_INPUT_ROWS.indexOf(maxRows) === -1) {
+      maxRows = 300;
+    }
+    var baseBlank =
+      input.basePrice == null ||
+      (typeof input.basePrice === "string" && trimText(input.basePrice) === "");
+    var basePrice = baseBlank ? 0 : parsePrice(input.basePrice);
+    if (!Number.isFinite(basePrice) || basePrice < 0) {
+      basePrice = 0;
+    }
+
+    var master = Object.create(null);
+    var rawRows = Array.isArray(input.options) ? input.options : [];
+    rawRows.forEach(function (row) {
+      var item = row || {};
+      var no = trimText(item.no);
+      var name = trimText(item.name);
+      var price = parsePrice(item.price);
+      if (!no || !name || !Number.isFinite(price) || price < 0) {
+        return;
+      }
+      if (!Object.prototype.hasOwnProperty.call(master, no)) {
+        master[no] = { no: no, name: name, price: price };
+      }
+    });
+
+    var codes = splitOptionCodes(input.selectedNos, maxRows);
+    var items = [];
+    var names = [];
+    var optionTotal = 0;
+    codes.forEach(function (code) {
+      if (!code) {
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(master, code)) {
+        var found = master[code];
+        items.push({
+          no: found.no,
+          name: found.name,
+          price: found.price,
+          missing: false,
+        });
+        names.push(found.name);
+        optionTotal += found.price;
+      } else {
+        items.push({
+          no: code,
+          name: "該当なし",
+          price: null,
+          missing: true,
+        });
+        names.push("該当なし");
+      }
+    });
+
+    var used = items.filter(function (item) {
+      return !item.missing;
+    });
+    var selectedNosText = used
+      .map(function (item) {
+        return item.no;
+      })
+      .join(",");
+    var selectedWithNames = used
+      .map(function (item) {
+        return item.no + " " + item.name;
+      })
+      .join("、");
+
+    return {
+      codes: codes.filter(function (code) {
+        return code !== "";
+      }),
+      items: items,
+      itemList: names.join(","),
+      selectedNosText: selectedNosText,
+      selectedWithNames: selectedWithNames,
+      optionTotal: optionTotal,
+      grandTotal: basePrice + optionTotal,
+      basePrice: basePrice,
+      masterCount: Object.keys(master).length,
+    };
+  }
+
   function priceNumFmt(options, basePrice) {
     var hasDecimal =
       !Number.isInteger(basePrice) ||
@@ -713,5 +820,8 @@
     sanitizeFilename: sanitizeFilename,
     validateOptionInput: validateOptionInput,
     normalizePriceText: normalizePriceText,
+    parsePrice: parsePrice,
+    splitOptionCodes: splitOptionCodes,
+    previewOptionSelection: previewOptionSelection,
   };
 });

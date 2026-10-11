@@ -115,6 +115,18 @@
 
     .table-wrap { overflow-x: auto; }
 
+    #optionTableWrap.compact {
+      max-height: 22.5rem;
+      overflow: auto;
+    }
+
+    #optionTableWrap.compact thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      box-shadow: 0 1px 0 var(--line);
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -237,8 +249,117 @@
       border-radius: 8px;
     }
 
+    .totals {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .total-box {
+      padding: 12px 14px;
+      background: var(--soft);
+      border-radius: 12px;
+    }
+
+    .total-box span {
+      display: block;
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .total-box strong {
+      font-size: 1.15rem;
+    }
+
+    .copy-row,
+    .copy-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .copy-row {
+      margin-top: 10px;
+    }
+
+    .copy-head {
+      margin-top: 12px;
+    }
+
+    .copy-head .hint {
+      margin: 0;
+      flex: 1 1 auto;
+    }
+
+    .copy-feedback {
+      margin: 0;
+      color: var(--accent-dark);
+      font-size: 0.86rem;
+      font-weight: 700;
+    }
+
+    button.copy-btn {
+      padding: 6px 12px;
+      font-size: 0.86rem;
+    }
+
+    td .copy-row {
+      margin: 0;
+    }
+
+    .preview-list {
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      min-height: 2.4rem;
+      word-break: break-word;
+    }
+
+    #previewEmpty {
+      margin-top: 10px;
+    }
+
+    .dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(28, 25, 21, 0.38);
+    }
+
+    .dialog-backdrop:not([hidden]) {
+      display: flex;
+    }
+
+    .dialog-card {
+      width: min(420px, 100%);
+      padding: 22px 22px 18px;
+      background: var(--paper);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .dialog-card p {
+      margin: 0 0 16px;
+      font-weight: 700;
+      white-space: pre-line;
+    }
+
+    .dialog-card button {
+      width: 100%;
+    }
+
     @media (max-width: 720px) {
       .fields { grid-template-columns: 1fr; }
+      .totals { grid-template-columns: 1fr; }
       main { width: min(100% - 20px, 980px); }
     }
   </style>
@@ -278,7 +399,7 @@
         <h2>オプション一覧</h2>
         <p id="optionCount" class="hint"></p>
       </div>
-      <div class="table-wrap">
+      <div id="optionTableWrap" class="table-wrap">
         <table>
           <thead>
             <tr>
@@ -316,10 +437,80 @@
       </div>
     </section>
 
+    <section class="card">
+      <div class="table-head">
+        <h2>仕様書の計算</h2>
+        <p id="previewSpecStatus" class="hint"></p>
+      </div>
+      <p class="hint">読み込んだJSON（または今編集中の一覧）のオプションから計算します。先に仕様書を読み込むか、上の一覧を入力してください。</p>
+      <label class="field">
+        選ぶオプションNo（カンマ区切り）
+        <input id="selectedNos" type="text" autocomplete="off" placeholder="例: 1,2,3">
+      </label>
+      <div class="totals">
+        <div class="total-box">
+          <span>本体価格</span>
+          <strong id="previewBase">0</strong>
+          <div class="copy-row">
+            <button type="button" class="ghost copy-btn" data-copy-key="base">コピー</button>
+            <p class="copy-feedback" hidden>コピーしました</p>
+          </div>
+        </div>
+        <div class="total-box">
+          <span>オプション合計</span>
+          <strong id="previewOptionTotal">0</strong>
+          <div class="copy-row">
+            <button type="button" class="ghost copy-btn" data-copy-key="optionTotal">コピー</button>
+            <p class="copy-feedback" hidden>コピーしました</p>
+          </div>
+        </div>
+        <div class="total-box">
+          <span>総合計</span>
+          <strong id="previewGrandTotal">0</strong>
+          <div class="copy-row">
+            <button type="button" class="ghost copy-btn" data-copy-key="grandTotal">コピー</button>
+            <p class="copy-feedback" hidden>コピーしました</p>
+          </div>
+        </div>
+      </div>
+      <div class="copy-head">
+        <p class="hint">選んだオプションNo</p>
+        <button type="button" class="ghost copy-btn" data-copy-key="selectedNos">コピー</button>
+        <p class="copy-feedback" hidden>コピーしました</p>
+      </div>
+      <p id="previewSelectedNos" class="preview-list"></p>
+      <div class="copy-head">
+        <p class="hint">選んだオプション（No と品名）</p>
+        <button type="button" class="ghost copy-btn" data-copy-key="selectedNames">コピー</button>
+        <p class="copy-feedback" hidden>コピーしました</p>
+      </div>
+      <p id="previewSelectedNames" class="preview-list"></p>
+      <p id="previewEmpty" class="hint">仕様書のオプション一覧がある状態で、番号を入力してください。</p>
+      <div class="table-wrap" style="margin-top: 10px;">
+        <table>
+          <thead>
+            <tr>
+              <th>オプションNo</th>
+              <th>品名</th>
+              <th>値段</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="previewRows"></tbody>
+        </table>
+      </div>
+    </section>
+
     <aside class="note">
       <p>フォルダごとPCにコピーし、index.html を Edge または Chrome で開いてください。初回だけこのアプリのフォルダを指定すると、saveデータ と 仕様書一覧 に保存できます。bat は不要です。</p>
     </aside>
   </main>
+  <div id="doneDialog" class="dialog-backdrop" hidden>
+    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="doneDialogMessage">
+      <p id="doneDialogMessage"></p>
+      <button id="doneDialogOk" class="primary" type="button">OK</button>
+    </div>
+  </div>
   <script src="excel-builder.js"></script>
   <script src="app.js"></script>
 </body>

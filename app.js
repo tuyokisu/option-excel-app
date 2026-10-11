@@ -4,12 +4,25 @@
   var api = window.OptionExcel;
   var rows = [];
   var tbody = document.getElementById("optionRows");
+  var optionTableWrap = document.getElementById("optionTableWrap");
   var specNameInput = document.getElementById("specName");
   var basePriceInput = document.getElementById("basePrice");
   var inputRowsSelect = document.getElementById("inputRows");
   var errorBox = document.getElementById("errors");
   var statusBox = document.getElementById("status");
   var optionCount = document.getElementById("optionCount");
+  var selectedNosInput = document.getElementById("selectedNos");
+  var previewBase = document.getElementById("previewBase");
+  var previewOptionTotal = document.getElementById("previewOptionTotal");
+  var previewGrandTotal = document.getElementById("previewGrandTotal");
+  var previewSpecStatus = document.getElementById("previewSpecStatus");
+  var previewSelectedNos = document.getElementById("previewSelectedNos");
+  var previewSelectedNames = document.getElementById("previewSelectedNames");
+  var previewEmpty = document.getElementById("previewEmpty");
+  var previewRows = document.getElementById("previewRows");
+  var doneDialog = document.getElementById("doneDialog");
+  var doneDialogMessage = document.getElementById("doneDialogMessage");
+  var doneDialogOk = document.getElementById("doneDialogOk");
   var loadInput = document.getElementById("loadJson");
   var linkSaveFolderButton = document.getElementById("linkSaveFolder");
   var saveFolderStatus = document.getElementById("saveFolderStatus");
@@ -24,6 +37,8 @@
   var excelDirHandle = null;
   var saveApi = false;
   var saveApiBase = "";
+  var lastPreview = null;
+  var copyFeedbackTimer = 0;
 
   function nextOptionNo(list) {
     var max = 0;
@@ -56,6 +71,176 @@
   function setStatus(message) {
     statusBox.textContent = message || "";
     statusBox.hidden = !message;
+  }
+
+  function formatMoney(value) {
+    if (value == null || !Number.isFinite(Number(value))) {
+      return "—";
+    }
+    return Number(value).toLocaleString("ja-JP");
+  }
+
+  function showDonePopup(message) {
+    doneDialogMessage.textContent = message;
+    doneDialog.hidden = false;
+    doneDialogOk.focus();
+  }
+
+  function hideDonePopup() {
+    doneDialog.hidden = true;
+  }
+
+  function copyText(text) {
+    var value = String(text == null ? "" : text);
+    if (!value) {
+      return Promise.reject(new Error("コピーする値がありません。"));
+    }
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function" && window.isSecureContext) {
+      return navigator.clipboard.writeText(value);
+    }
+    return new Promise(function (resolve, reject) {
+      var area = document.createElement("textarea");
+      area.value = value;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.left = "-9999px";
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch (error) {
+        ok = false;
+      }
+      area.remove();
+      if (ok) {
+        resolve();
+      } else {
+        reject(new Error("コピーできませんでした。"));
+      }
+    });
+  }
+
+  function hideCopyFeedback() {
+    document.querySelectorAll(".copy-feedback").forEach(function (el) {
+      el.hidden = true;
+    });
+  }
+
+  function showCopyFeedback(button) {
+    hideCopyFeedback();
+    var note = button.parentElement && button.parentElement.querySelector(".copy-feedback");
+    if (!note) {
+      note = document.createElement("p");
+      note.className = "copy-feedback";
+      note.textContent = "コピーしました";
+      button.insertAdjacentElement("afterend", note);
+    }
+    note.hidden = false;
+    window.clearTimeout(copyFeedbackTimer);
+    copyFeedbackTimer = window.setTimeout(function () {
+      note.hidden = true;
+    }, 1800);
+  }
+
+  function copyValue(text, button) {
+    if (!text) {
+      showErrors(["コピーする値がありません。"]);
+      return;
+    }
+    copyText(text).then(function () {
+      showErrors([]);
+      showCopyFeedback(button);
+    }).catch(function () {
+      showErrors(["コピーできませんでした。"]);
+    });
+  }
+
+  function previewCopyText(key, item) {
+    if (key === "base") {
+      return lastPreview ? String(lastPreview.basePrice) : "";
+    }
+    if (key === "optionTotal") {
+      return lastPreview ? String(lastPreview.optionTotal) : "";
+    }
+    if (key === "grandTotal") {
+      return lastPreview ? String(lastPreview.grandTotal) : "";
+    }
+    if (key === "selectedNos") {
+      return lastPreview && lastPreview.selectedNosText ? lastPreview.selectedNosText : "";
+    }
+    if (key === "selectedNames") {
+      return lastPreview && lastPreview.selectedWithNames ? lastPreview.selectedWithNames : "";
+    }
+    if (key === "row" && item) {
+      if (item.missing) {
+        return item.no + " " + item.name;
+      }
+      return item.no + " " + item.name + " " + item.price;
+    }
+    return "";
+  }
+
+  function updatePreview() {
+    if (!api || typeof api.previewOptionSelection !== "function") {
+      return;
+    }
+    var preview = api.previewOptionSelection({
+      basePrice: basePriceInput.value,
+      inputRows: Number(inputRowsSelect.value),
+      selectedNos: selectedNosInput.value,
+      options: rows,
+    });
+    var specLabel = specNameInput.value.trim() || "（仕様名なし）";
+    previewSpecStatus.textContent =
+      specLabel + " のオプション一覧 " + preview.masterCount + "件で計算";
+    lastPreview = preview;
+    previewBase.textContent = formatMoney(preview.basePrice);
+    previewOptionTotal.textContent = formatMoney(preview.optionTotal);
+    previewGrandTotal.textContent = formatMoney(preview.grandTotal);
+    previewSelectedNos.textContent = preview.selectedNosText || "（まだ選んでいません）";
+    previewSelectedNames.textContent = preview.selectedWithNames || "（まだ選んでいません）";
+    previewRows.replaceChildren();
+    preview.items.forEach(function (item) {
+      var tr = document.createElement("tr");
+      var noCell = document.createElement("td");
+      noCell.textContent = item.no;
+      var nameCell = document.createElement("td");
+      nameCell.textContent = item.name;
+      var priceCell = document.createElement("td");
+      priceCell.textContent = item.missing ? "—" : formatMoney(item.price);
+      var actionCell = document.createElement("td");
+      var copyWrap = document.createElement("div");
+      copyWrap.className = "copy-row";
+      var copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "ghost copy-btn";
+      copyBtn.textContent = "コピー";
+      copyBtn.addEventListener("click", function () {
+        copyValue(previewCopyText("row", item), copyBtn);
+      });
+      var copied = document.createElement("p");
+      copied.className = "copy-feedback";
+      copied.textContent = "コピーしました";
+      copied.hidden = true;
+      copyWrap.appendChild(copyBtn);
+      copyWrap.appendChild(copied);
+      actionCell.appendChild(copyWrap);
+      tr.appendChild(noCell);
+      tr.appendChild(nameCell);
+      tr.appendChild(priceCell);
+      tr.appendChild(actionCell);
+      previewRows.appendChild(tr);
+    });
+    if (preview.masterCount === 0) {
+      previewEmpty.textContent = "この仕様書にはまだオプション一覧がありません。JSONを読み込むか、上の一覧を入力してください。";
+      previewEmpty.hidden = false;
+    } else if (preview.items.length === 0) {
+      previewEmpty.textContent = "選ぶオプションNoを入力すると、Noと品名が表示されます。";
+      previewEmpty.hidden = false;
+    } else {
+      previewEmpty.hidden = true;
+    }
   }
 
   function showErrors(messages) {
@@ -94,6 +279,7 @@
       field.row[field.key] = input.value;
       setStatus("");
       updateCount();
+      updatePreview();
     });
     cell.appendChild(input);
     tr.appendChild(cell);
@@ -126,6 +312,7 @@
         }
         setStatus("");
         render();
+        updatePreview();
       });
       actionCell.appendChild(removeButton);
       tr.appendChild(actionCell);
@@ -135,6 +322,7 @@
         nameInput.focus();
       }
     });
+    optionTableWrap.classList.toggle("compact", rows.length >= 11);
     updateCount();
   }
 
@@ -460,6 +648,7 @@
       specName: specNameInput.value.trim(),
       basePrice: baseStored,
       inputRows: Number(inputRowsSelect.value),
+      selectedNos: selectedNosInput.value.trim(),
       options: options,
     };
   }
@@ -504,6 +693,7 @@
         await refreshSavedFileList();
         savedFileSelect.value = apiName;
         setStatus("saveデータ に保存しました: " + apiName);
+        showDonePopup("保存が完了しました。\n" + apiName);
         return;
       } catch (error) {
         showErrors([error && error.message ? error.message : "saveデータ フォルダへ保存できませんでした。"]);
@@ -519,6 +709,7 @@
       await refreshSavedFileList();
       savedFileSelect.value = savedName;
       setStatus("saveデータ に保存しました: " + savedName);
+      showDonePopup("保存が完了しました。\n" + savedName);
     } catch (error) {
       showErrors([error && error.message ? error.message : "saveデータ フォルダへ保存できませんでした。"]);
     }
@@ -558,7 +749,9 @@
     } else {
       var last = nextRows[nextRows.length - 1];
       if (isFilled(last)) {
-        nextRows.push(emptyRow(nextRows), emptyRow(nextRows), emptyRow(nextRows));
+        nextRows.push(emptyRow(nextRows));
+        nextRows.push(emptyRow(nextRows));
+        nextRows.push(emptyRow(nextRows));
       } else {
         nextRows.push(emptyRow(nextRows));
       }
@@ -566,6 +759,7 @@
 
     specNameInput.value = data.specName == null ? "" : String(data.specName);
     basePriceInput.value = data.basePrice == null ? "" : String(data.basePrice);
+    selectedNosInput.value = data.selectedNos == null ? "" : String(data.selectedNos);
     inputRowsSelect.value = String(inputRows);
     rows = nextRows;
     var filled = rows.filter(isFilled).length;
@@ -585,6 +779,7 @@
         : "一覧を読み込みました。"
     );
     render(continueIndex);
+    updatePreview();
   }
 
   function loadList(file) {
@@ -674,11 +869,13 @@
           throw new Error("仕様書一覧 フォルダへ保存できませんでした。");
         }
         setStatus("仕様書一覧 に保存しました: " + filename);
+        showDonePopup("Excelの作成が完了しました。\n" + filename);
         return;
       }
       if (await ensureAppFolder()) {
         await writeExcelToHandle(filename, buffer);
         setStatus("仕様書一覧 に保存しました: " + filename);
+        showDonePopup("Excelの作成が完了しました。\n" + filename);
         return;
       }
       showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。Excelは Downloads には保存しません。"]);
@@ -691,6 +888,7 @@
     rows.push(emptyRow());
     setStatus("");
     render(rows.length - 1);
+    updatePreview();
   });
 
   linkSaveFolderButton.addEventListener("click", function () {
@@ -721,15 +919,39 @@
 
   specNameInput.addEventListener("input", function () {
     setStatus("");
+    updatePreview();
   });
   basePriceInput.addEventListener("input", function () {
     setStatus("");
+    updatePreview();
+  });
+  selectedNosInput.addEventListener("input", function () {
+    updatePreview();
   });
   inputRowsSelect.addEventListener("change", function () {
     setStatus("");
+    updatePreview();
+  });
+  doneDialogOk.addEventListener("click", hideDonePopup);
+  doneDialog.addEventListener("click", function (event) {
+    if (event.target === doneDialog) {
+      hideDonePopup();
+    }
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && !doneDialog.hidden) {
+      hideDonePopup();
+    }
+  });
+
+  document.querySelectorAll(".copy-btn[data-copy-key]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      copyValue(previewCopyText(button.getAttribute("data-copy-key")), button);
+    });
   });
 
   rows = starterRows();
   render();
+  updatePreview();
   initSaveFolder();
 })();
