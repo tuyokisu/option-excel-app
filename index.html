@@ -140,11 +140,16 @@
     }
 
     td input { min-width: 0; }
+    td input.option-no {
+      width: 5.5rem;
+      text-align: right;
+    }
     td input.price,
     #basePrice { text-align: right; }
 
     .actions,
-    .table-actions {
+    .table-actions,
+    .save-load {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
@@ -152,6 +157,27 @@
     }
 
     .table-actions { margin-top: 12px; }
+
+    .save-load {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    .save-load select {
+      min-width: min(100%, 280px);
+      padding: 10px 12px;
+      border: 1px solid #d9d0c3;
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    #saveFolderStatus {
+      flex: 1 1 100%;
+      margin: 0;
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
 
     button,
     .file-button {
@@ -221,7 +247,7 @@
   <main>
     <header>
       <h1>オプションExcel作成</h1>
-      <p>品名と値段を入れると、オプションNoは1から自動で付きます。Excelでは番号をカンマ区切りで1つのセルに入れると、品目リストと合計金額が作られます。</p>
+      <p>オプションNoは最初から 1, 2, 3… が入っています。必要なら自分で変えられます。Excelでは番号をカンマ区切りで1つのセルに入れると、品目リストと合計金額が作られます。</p>
     </header>
 
     <section class="card">
@@ -265,16 +291,25 @@
           <tbody id="optionRows"></tbody>
         </table>
       </div>
-      <p class="hint">オプションNoは上から1、2、3…と付きます。Excelでは 1,2,3 のようにカンマで区切って入力します。</p>
+      <p class="hint">オプションNoは最初から番号順に入っています。変更もできます。行を追加すると次の番号が入ります。Excelでは 1,2,3 のようにカンマで区切って入力します。</p>
       <div class="table-actions">
         <button id="addRow" type="button">行を追加</button>
       </div>
       <div id="errors" role="alert" hidden></div>
       <p id="status" hidden></p>
+      <div class="save-load">
+        <button id="linkSaveFolder" type="button" hidden>saveデータフォルダを指定</button>
+        <p id="saveFolderStatus">保存先はアプリ内の saveデータ フォルダです。</p>
+        <select id="savedFileSelect" hidden aria-label="保存済み一覧">
+          <option value="">保存済みを選ぶ</option>
+        </select>
+        <button id="loadSavedFile" type="button" hidden>選んで読み込む</button>
+        <button id="refreshSavedFiles" type="button" hidden>一覧を更新</button>
+      </div>
       <div class="actions" style="margin-top: 16px;">
-        <button id="saveJson" type="button">一覧を保存</button>
+        <button id="saveJson" type="button">saveする</button>
         <label class="file-button">
-          一覧を読み込む
+          別ファイルから読み込む
           <input id="loadJson" type="file" accept="application/json,.json">
         </label>
         <button id="buildExcel" class="primary" type="button">Excelを作成</button>
@@ -282,7 +317,7 @@
     </section>
 
     <aside class="note">
-      <p>このフォルダごとPCにコピーし、index.html を開いてください。インストールは不要です。作成したExcelは Excel 2016 以降で使えます。マクロは使用していません。</p>
+      <p>会社のPCでは 開く.bat をダブルクリックしてください。Excelは Downloads ではなく、アプリ内の 仕様書一覧 フォルダに保存されます。マクロは使用していません。</p>
     </aside>
   </main>
   <script src="excel-builder.js"></script>

@@ -277,4 +277,9 @@ test("the page is a classic offline script", () => {
   assert.equal(builder !== -1 && builder < app, true);
   assert.equal(html.includes('type="module"'), false);
   assert.equal(html.includes('id="basePrice"'), true);
+  assert.equal(html.includes("saveデータ"), true);
+  assert.equal(html.includes('id="saveJson"'), true);
+  assert.equal(html.includes('id="loadJson"'), true);
+  assert.equal(html.includes("開く.bat"), true);
+  assert.equal(html.includes("仕様書一覧"), true);
 });

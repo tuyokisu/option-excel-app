@@ -11,9 +11,42 @@
   var statusBox = document.getElementById("status");
   var optionCount = document.getElementById("optionCount");
   var loadInput = document.getElementById("loadJson");
+  var linkSaveFolderButton = document.getElementById("linkSaveFolder");
+  var saveFolderStatus = document.getElementById("saveFolderStatus");
+  var savedFileSelect = document.getElementById("savedFileSelect");
+  var loadSavedFileButton = document.getElementById("loadSavedFile");
+  var refreshSavedFilesButton = document.getElementById("refreshSavedFiles");
+  var SAVE_DIR_DB = "option-excel-app";
+  var SAVE_DIR_STORE = "handles";
+  var SAVE_DIR_KEY = "save-data";
+  var EXCEL_DIR_KEY = "excel-list";
+  var saveDirHandle = null;
+  var excelDirHandle = null;
+  var saveApi = false;
+  var saveApiBase = "";
 
-  function emptyRow() {
-    return { name: "", price: "" };
+  function nextOptionNo(list) {
+    var max = 0;
+    (list || rows).forEach(function (row) {
+      var n = Number(String(row && row.no != null ? row.no : "").trim());
+      if (Number.isInteger(n) && n > max) {
+        max = n;
+      }
+    });
+    return String(max + 1);
+  }
+
+  function emptyRow(list) {
+    return { no: nextOptionNo(list), name: "", price: "" };
+  }
+
+  function starterRows() {
+    var list = [];
+    var i;
+    for (i = 1; i <= 5; i += 1) {
+      list.push({ no: String(i), name: "", price: "" });
+    }
+    return list;
   }
 
   function isFilled(row) {
@@ -72,13 +105,11 @@
     rows.forEach(function (row, index) {
       var tr = document.createElement("tr");
 
-      var numberCell = document.createElement("td");
-      numberCell.className = "row-no";
-      numberCell.textContent = String(index + 1);
-      tr.appendChild(numberCell);
-
-      var nameInput = addField(tr, { row: row, key: "name" }, index + 1 + " 品名", row.name);
-      addField(tr, { row: row, key: "price" }, index + 1 + " 値段", row.price, function (input) {
+      addField(tr, { row: row, key: "no" }, (index + 1) + " オプションNo", row.no, function (input) {
+        input.className = "option-no";
+      });
+      var nameInput = addField(tr, { row: row, key: "name" }, (index + 1) + " 品名", row.name);
+      addField(tr, { row: row, key: "price" }, (index + 1) + " 値段", row.price, function (input) {
         input.inputMode = "decimal";
         input.className = "price";
       });
@@ -112,9 +143,9 @@
       specName: specNameInput.value,
       basePrice: basePriceInput.value,
       inputRows: Number(inputRowsSelect.value),
-      options: rows.map(function (row, index) {
+      options: rows.map(function (row) {
         return {
-          no: isFilled(row) ? String(index + 1) : "",
+          no: isFilled(row) ? String(row.no == null ? "" : row.no).trim() : "",
           name: row.name,
           price: row.price,
         };
@@ -135,14 +166,295 @@
     }, 1000);
   }
 
+  function apiUrl(path) {
+    return saveApiBase + path;
+  }
+
   function jsonFilename() {
     var excelName = api.sanitizeFilename(specNameInput.value.trim() || "オプション");
     return excelName.replace(/\.xlsx$/i, ".json");
   }
 
-  function saveList() {
-    showErrors([]);
-    var checked = api.validateOptionInput(currentPayload());
+  function supportsSaveFolder() {
+    return typeof window.showDirectoryPicker === "function" && typeof indexedDB !== "undefined";
+  }
+
+  function openSaveDirDb() {
+    return new Promise(function (resolve, reject) {
+      var request = indexedDB.open(SAVE_DIR_DB, 1);
+      request.onupgradeneeded = function () {
+        request.result.createObjectStore(SAVE_DIR_STORE);
+      };
+      request.onsuccess = function () {
+        resolve(request.result);
+      };
+      request.onerror = function () {
+        reject(request.error || new Error("IndexedDBを開けませんでした。"));
+      };
+    });
+  }
+
+  function storeHandle(key, handle) {
+    return openSaveDirDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(SAVE_DIR_STORE, "readwrite");
+        tx.objectStore(SAVE_DIR_STORE).put(handle, key);
+        tx.oncomplete = function () {
+          resolve();
+        };
+        tx.onerror = function () {
+          reject(tx.error || new Error("保存フォルダ情報を記録できませんでした。"));
+        };
+      });
+    });
+  }
+
+  function storeSaveDirHandle(handle) {
+    return storeHandle(SAVE_DIR_KEY, handle);
+  }
+
+  function readStoredHandle(key) {
+    return openSaveDirDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(SAVE_DIR_STORE, "readonly");
+        var request = tx.objectStore(SAVE_DIR_STORE).get(key);
+        request.onsuccess = function () {
+          resolve(request.result || null);
+        };
+        request.onerror = function () {
+          reject(request.error || new Error("保存フォルダ情報を読み込めませんでした。"));
+        };
+      });
+    });
+  }
+
+  async function ensureSaveDirPermission(handle, mode) {
+    if (!handle || typeof handle.queryPermission !== "function") {
+      return false;
+    }
+    var opts = { mode: mode || "readwrite" };
+    if ((await handle.queryPermission(opts)) === "granted") {
+      return true;
+    }
+    if (typeof handle.requestPermission !== "function") {
+      return false;
+    }
+    return (await handle.requestPermission(opts)) === "granted";
+  }
+
+  function fillFileSelect(files) {
+    savedFileSelect.replaceChildren();
+    var placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = files.length ? "保存済みを選ぶ" : "保存済みファイルはまだありません";
+    savedFileSelect.appendChild(placeholder);
+    files.forEach(function (name) {
+      var option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      savedFileSelect.appendChild(option);
+    });
+  }
+
+  function setSaveFolderUiLinked(name) {
+    saveFolderStatus.textContent =
+      "保存先: アプリ内の saveデータ" + (name && name !== "saveデータ" ? "（" + name + "）" : "") + "。saveする でここに保存します。";
+    linkSaveFolderButton.hidden = saveApi;
+    linkSaveFolderButton.textContent = "saveデータフォルダを変更";
+    savedFileSelect.hidden = false;
+    loadSavedFileButton.hidden = false;
+    refreshSavedFilesButton.hidden = false;
+  }
+
+  function setSaveFolderUiUnlinked(message) {
+    saveFolderStatus.textContent =
+      message ||
+      "初回だけ、このアプリ内の saveデータ フォルダを選んでください。選ぶと saveデータ に保存できます。";
+    linkSaveFolderButton.textContent = "saveデータフォルダを指定";
+    savedFileSelect.hidden = true;
+    loadSavedFileButton.hidden = true;
+    refreshSavedFilesButton.hidden = true;
+  }
+
+  async function listSavedJsonFiles(handle) {
+    var names = [];
+    for await (var entry of handle.values()) {
+      if (entry.kind === "file" && /\.json$/i.test(entry.name)) {
+        names.push(entry.name);
+      }
+    }
+    names.sort(function (a, b) {
+      return a.localeCompare(b, "ja");
+    });
+    return names;
+  }
+
+  async function refreshSavedFileList() {
+    if (saveApi) {
+      var res = await fetch(apiUrl("/api/saves"), { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error("saveデータ の一覧を取得できませんでした。");
+      }
+      var data = await res.json();
+      fillFileSelect(data.files || []);
+      return;
+    }
+    if (!saveDirHandle) {
+      fillFileSelect([]);
+      return;
+    }
+    var ok = await ensureSaveDirPermission(saveDirHandle, "read");
+    if (!ok) {
+      saveDirHandle = null;
+      setSaveFolderUiUnlinked("saveデータ フォルダへのアクセスが切れました。もう一度指定してください。");
+      return;
+    }
+    fillFileSelect(await listSavedJsonFiles(saveDirHandle));
+  }
+
+  async function useSaveDirHandle(handle) {
+    if (!handle) {
+      return false;
+    }
+    var ok = await ensureSaveDirPermission(handle, "readwrite");
+    if (!ok) {
+      return false;
+    }
+    saveDirHandle = handle;
+    await storeSaveDirHandle(handle);
+    setSaveFolderUiLinked(handle.name);
+    await refreshSavedFileList();
+    return true;
+  }
+
+  async function useExcelDirHandle(handle) {
+    if (!handle) {
+      return false;
+    }
+    var ok = await ensureSaveDirPermission(handle, "readwrite");
+    if (!ok) {
+      return false;
+    }
+    excelDirHandle = handle;
+    await storeHandle(EXCEL_DIR_KEY, handle);
+    return true;
+  }
+
+  async function ensureExcelDirHandle() {
+    if (excelDirHandle && (await ensureSaveDirPermission(excelDirHandle, "readwrite"))) {
+      return true;
+    }
+    try {
+      var stored = await readStoredHandle(EXCEL_DIR_KEY);
+      if (stored && (await useExcelDirHandle(stored))) {
+        return true;
+      }
+    } catch (error) {
+      // ignore
+    }
+    if (!supportsSaveFolder()) {
+      return false;
+    }
+    try {
+      var handle = await window.showDirectoryPicker({
+        id: "option-excel-spec-list",
+        mode: "readwrite",
+      });
+      return useExcelDirHandle(handle);
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  async function writeExcelToHandle(filename, buffer) {
+    var fileHandle = await excelDirHandle.getFileHandle(filename, { create: true });
+    var writable = await fileHandle.createWritable();
+    await writable.write(buffer);
+    await writable.close();
+  }
+
+  async function chooseSaveFolder() {
+    if (!supportsSaveFolder()) {
+      showErrors([
+        "このブラウザでは saveデータ フォルダへ直接保存できません。Edge または Chrome で開くか、別ファイルから読み込む を使ってください。",
+      ]);
+      return;
+    }
+    try {
+      var handle = await window.showDirectoryPicker({
+        id: "option-excel-save-data",
+        mode: "readwrite",
+        startIn: "documents",
+      });
+      if (!(await useSaveDirHandle(handle))) {
+        showErrors(["saveデータ フォルダへのアクセスが許可されませんでした。"]);
+      } else {
+        showErrors([]);
+        setStatus("saveデータ フォルダを使えるようにしました。");
+      }
+    } catch (error) {
+      if (error && error.name !== "AbortError") {
+        showErrors([error.message || "saveデータ フォルダを指定できませんでした。"]);
+      }
+    }
+  }
+
+  async function probeSaveApi() {
+    var bases = [""];
+    if (window.location.protocol === "file:") {
+      bases = ["http://127.0.0.1:8765"];
+    } else {
+      bases.push("http://127.0.0.1:8765");
+    }
+    var i;
+    for (i = 0; i < bases.length; i += 1) {
+      try {
+        var res = await fetch(bases[i] + "/api/saves", { cache: "no-store" });
+        if (!res.ok) {
+          continue;
+        }
+        var data = await res.json();
+        saveApi = true;
+        saveApiBase = bases[i];
+        fillFileSelect(data.files || []);
+        setSaveFolderUiLinked("saveデータ");
+        return true;
+      } catch (error) {
+        // try next
+      }
+    }
+    saveApi = false;
+    saveApiBase = "";
+    return false;
+  }
+
+  async function initSaveFolder() {
+    if (await probeSaveApi()) {
+      return;
+    }
+    if (!supportsSaveFolder()) {
+      setSaveFolderUiUnlinked(
+        "開く.bat から起動すると、saveする でアプリ内の saveデータ フォルダに保存できます。"
+      );
+      linkSaveFolderButton.hidden = true;
+      return;
+    }
+    try {
+      var stored = await readStoredHandle(SAVE_DIR_KEY);
+      if (stored && (await useSaveDirHandle(stored))) {
+        return;
+      }
+    } catch (error) {
+      // ignore restore errors
+    }
+    setSaveFolderUiUnlinked("開く.bat から起動すると、saveする でアプリ内の saveデータ フォルダに保存できます。");
+    linkSaveFolderButton.hidden = true;
+  }
+
+  function buildDocumentData() {
     var options = [];
     rows.forEach(function (row, index) {
       if (!isFilled(row)) {
@@ -151,7 +463,7 @@
       var price = api.normalizePriceText(row.price);
       var parsed = /^\d+(\.\d+)?$/.test(price) ? Number(price) : row.price.trim();
       options.push({
-        no: String(index + 1),
+        no: String(row.no == null ? "" : row.no).trim(),
         name: row.name.trim(),
         price: parsed,
       });
@@ -160,27 +472,81 @@
     var baseText = api.normalizePriceText(basePriceInput.value);
     var baseStored = /^\d+(\.\d+)?$/.test(baseText) ? Number(baseText) : basePriceInput.value.trim();
 
-    if (
-      !checked.ok &&
-      options.length === 0 &&
-      !specNameInput.value.trim() &&
-      !basePriceInput.value.trim()
-    ) {
-      showErrors(["保存する仕様名、本体価格、またはオプションがありません。"]);
-      return;
-    }
-
-    var documentData = {
+    return {
       specName: specNameInput.value.trim(),
       basePrice: baseStored,
       inputRows: Number(inputRowsSelect.value),
       options: options,
     };
+  }
+
+  async function writeDocumentToSaveFolder(documentData) {
+    var filename = jsonFilename();
     var blob = new Blob([JSON.stringify(documentData, null, 2)], {
       type: "application/json;charset=utf-8",
     });
-    downloadBlob(blob, jsonFilename());
-    setStatus("一覧を保存しました。");
+    var fileHandle = await saveDirHandle.getFileHandle(filename, { create: true });
+    var writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return filename;
+  }
+
+  async function saveList() {
+    showErrors([]);
+    var documentData = buildDocumentData();
+    if (
+      !documentData.specName &&
+      documentData.options.length === 0 &&
+      (documentData.basePrice === "" || documentData.basePrice == null)
+    ) {
+      showErrors(["保存する仕様名、本体価格、またはオプションがありません。"]);
+      return;
+    }
+    if (!saveApi) {
+      await probeSaveApi();
+    }
+    if (saveApi) {
+      try {
+        var apiName = jsonFilename();
+        var put = await fetch(apiUrl("/api/saves/" + encodeURIComponent(apiName)), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify(documentData, null, 2),
+        });
+        if (!put.ok) {
+          throw new Error("saveデータ フォルダへ保存できませんでした。");
+        }
+        await refreshSavedFileList();
+        savedFileSelect.value = apiName;
+        setStatus("saveデータ に保存しました: " + apiName);
+        return;
+      } catch (error) {
+        showErrors([error && error.message ? error.message : "saveデータ フォルダへ保存できませんでした。"]);
+        return;
+      }
+    }
+    if (saveDirHandle) {
+      try {
+        var ok = await ensureSaveDirPermission(saveDirHandle, "readwrite");
+        if (!ok) {
+          saveDirHandle = null;
+          setSaveFolderUiUnlinked("saveデータ フォルダへのアクセスが切れました。開く.bat から起動してください。");
+          showErrors(["saveデータ フォルダへ保存できませんでした。開く.bat から起動してください。"]);
+          return;
+        }
+        var savedName = await writeDocumentToSaveFolder(documentData);
+        await refreshSavedFileList();
+        savedFileSelect.value = savedName;
+        setStatus("saveデータ に保存しました: " + savedName);
+        return;
+      } catch (error) {
+        showErrors([error && error.message ? error.message : "saveデータ フォルダへ保存できませんでした。"]);
+        return;
+      }
+    }
+
+    showErrors(["アプリ内の saveデータ に保存するには、開く.bat をダブルクリックして起動してください。"]);
   }
 
   function applyLoaded(data) {
@@ -203,22 +569,47 @@
         return;
       }
       nextRows.push({
+        no:
+          item.no == null || String(item.no).trim() === ""
+            ? String(i + 1)
+            : String(item.no),
         name: item.name == null ? "" : String(item.name),
         price: item.price == null ? "" : String(item.price),
       });
     }
 
     if (nextRows.length === 0) {
-      nextRows = [emptyRow(), emptyRow(), emptyRow(), emptyRow(), emptyRow()];
+      nextRows = starterRows();
+    } else {
+      var last = nextRows[nextRows.length - 1];
+      if (isFilled(last)) {
+        nextRows.push(emptyRow(nextRows), emptyRow(nextRows), emptyRow(nextRows));
+      } else {
+        nextRows.push(emptyRow(nextRows));
+      }
     }
 
     specNameInput.value = data.specName == null ? "" : String(data.specName);
     basePriceInput.value = data.basePrice == null ? "" : String(data.basePrice);
     inputRowsSelect.value = String(inputRows);
     rows = nextRows;
+    var filled = rows.filter(isFilled).length;
+    var nextNo = filled + 1;
+    var continueIndex = 0;
+    for (var j = 0; j < rows.length; j += 1) {
+      if (!isFilled(rows[j])) {
+        continueIndex = j;
+        break;
+      }
+      continueIndex = rows.length - 1;
+    }
     showErrors([]);
-    setStatus("一覧を読み込みました。");
-    render();
+    setStatus(
+      filled
+        ? "一覧を読み込みました。次は " + nextNo + " 番から続けられます。"
+        : "一覧を読み込みました。"
+    );
+    render(continueIndex);
   }
 
   function loadList(file) {
@@ -234,6 +625,44 @@
       showErrors(["一覧ファイルを読み込めませんでした。"]);
     };
     reader.readAsText(file, "utf-8");
+  }
+
+  async function loadSelectedSavedFile() {
+    var name = savedFileSelect.value;
+    if (!name) {
+      showErrors(["読み込む保存済みファイルを選んでください。"]);
+      return;
+    }
+    if (saveApi) {
+      try {
+        var apiRes = await fetch(apiUrl("/api/saves/" + encodeURIComponent(name)), { cache: "no-store" });
+        if (!apiRes.ok) {
+          throw new Error("saveデータ から読み込めませんでした。");
+        }
+        applyLoaded(await apiRes.json());
+      } catch (error) {
+        showErrors([error && error.message ? error.message : "saveデータ から読み込めませんでした。"]);
+      }
+      return;
+    }
+    if (!saveDirHandle) {
+      showErrors(["saveデータ フォルダが指定されていません。開く.bat から起動してください。"]);
+      return;
+    }
+    try {
+      var ok = await ensureSaveDirPermission(saveDirHandle, "read");
+      if (!ok) {
+        saveDirHandle = null;
+        setSaveFolderUiUnlinked("saveデータ フォルダへのアクセスが切れました。もう一度指定してください。");
+        showErrors(["saveデータ から読み込めませんでした。"]);
+        return;
+      }
+      var fileHandle = await saveDirHandle.getFileHandle(name);
+      var file = await fileHandle.getFile();
+      loadList(file);
+    } catch (error) {
+      showErrors([error && error.message ? error.message : "saveデータ から読み込めませんでした。"]);
+    }
   }
 
   async function buildExcel() {
@@ -254,11 +683,32 @@
     try {
       var workbook = api.buildOptionWorkbook(checked);
       var buffer = await workbook.xlsx.writeBuffer();
-      var blob = new Blob([buffer], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
-      downloadBlob(blob, api.sanitizeFilename(checked.specName));
-      setStatus("Excelを保存しました。");
+      var filename = api.sanitizeFilename(checked.specName);
+      if (!saveApi) {
+        await probeSaveApi();
+      }
+      if (saveApi) {
+        var put = await fetch(apiUrl("/api/excels/" + encodeURIComponent(filename)), {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          },
+          body: buffer,
+        });
+        if (!put.ok) {
+          throw new Error("仕様書一覧 フォルダへ保存できませんでした。");
+        }
+        setStatus("仕様書一覧 に保存しました: " + filename);
+        return;
+      }
+      if (await ensureExcelDirHandle()) {
+        await writeExcelToHandle(filename, buffer);
+        setStatus("仕様書一覧 に保存しました: " + filename);
+        return;
+      }
+      showErrors([
+        "Downloads には保存しません。開く.bat から起動するか、表示されたフォルダ選択でアプリ内の「仕様書一覧」を選んでください。",
+      ]);
     } catch (error) {
       showErrors([error && error.message ? error.message : "Excelを作成できませんでした。"]);
     }
@@ -270,7 +720,20 @@
     render(rows.length - 1);
   });
 
-  document.getElementById("saveJson").addEventListener("click", saveList);
+  linkSaveFolderButton.addEventListener("click", function () {
+    chooseSaveFolder();
+  });
+  refreshSavedFilesButton.addEventListener("click", function () {
+    refreshSavedFileList().catch(function (error) {
+      showErrors([error && error.message ? error.message : "保存済み一覧を更新できませんでした。"]);
+    });
+  });
+  loadSavedFileButton.addEventListener("click", function () {
+    loadSelectedSavedFile();
+  });
+  document.getElementById("saveJson").addEventListener("click", function () {
+    saveList();
+  });
   document.getElementById("buildExcel").addEventListener("click", function () {
     buildExcel();
   });
@@ -293,6 +756,7 @@
     setStatus("");
   });
 
-  rows = [emptyRow(), emptyRow(), emptyRow(), emptyRow(), emptyRow()];
+  rows = starterRows();
   render();
+  initSaveFolder();
 })();

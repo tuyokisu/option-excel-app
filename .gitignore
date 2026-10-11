@@ -1,4 +1,6 @@
 test-output/
+saveデータ/*.json
+仕様書一覧/*.xlsx
 *.xlsx
 .DS_Store
 Thumbs.db

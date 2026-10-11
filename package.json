@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "オプション一覧から数式入りExcelを作るローカルアプリ",
   "scripts": {
+    "start": "node server.js",
     "test": "node --test test/build-workbook.test.js"
   }
 }
