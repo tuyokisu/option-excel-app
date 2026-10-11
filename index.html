@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>オプションExcel作成</title>
+  <style>
+    :root {
+      --bg: #f3f0e8;
+      --paper: #fffdf9;
+      --ink: #1c1915;
+      --muted: #5f584e;
+      --line: #e3dacd;
+      --accent: #0e6b58;
+      --accent-dark: #0a5344;
+      --soft: #e7f2ee;
+      --danger: #8d2b2b;
+      --danger-bg: #fdeeee;
+      --header: #efe6d8;
+      --shadow: 0 10px 30px rgba(60, 45, 20, 0.06);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(14, 107, 88, 0.08), transparent 32rem),
+        var(--bg);
+      font-family: "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif;
+      line-height: 1.5;
+    }
+
+    main {
+      width: min(980px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 48px;
+    }
+
+    header h1 {
+      margin: 0 0 6px;
+      font-size: 1.7rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    header p,
+    .hint,
+    .note p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .card {
+      margin-top: 20px;
+      padding: 18px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .fields {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(160px, 0.8fr) minmax(140px, 0.5fr);
+      gap: 16px;
+    }
+
+    label.field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-weight: 700;
+    }
+
+    input,
+    select,
+    button {
+      font: inherit;
+    }
+
+    input[type="text"],
+    select {
+      width: 100%;
+      padding: 10px 12px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid #d9d0c3;
+      border-radius: 10px;
+    }
+
+    input:focus,
+    select:focus,
+    button:focus-visible {
+      outline: 3px solid rgba(14, 107, 88, 0.28);
+      border-color: var(--accent);
+    }
+
+    .hint { margin-top: 12px; font-size: 0.92rem; }
+
+    .table-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .table-head h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .table-wrap { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 680px;
+    }
+
+    th,
+    td {
+      padding: 8px;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th {
+      font-size: 0.92rem;
+      background: var(--header);
+    }
+
+    td.row-no {
+      width: 48px;
+      color: var(--muted);
+      text-align: right;
+    }
+
+    td input { min-width: 0; }
+    td input.price,
+    #basePrice { text-align: right; }
+
+    .actions,
+    .table-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .table-actions { margin-top: 12px; }
+
+    button,
+    .file-button {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 10px 16px;
+      cursor: pointer;
+      background: var(--soft);
+      color: var(--accent-dark);
+      font-weight: 700;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    button.primary:hover { background: var(--accent-dark); }
+
+    button.ghost {
+      padding: 7px 12px;
+      background: transparent;
+      border-color: #d9d0c3;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .file-button input {
+      display: none;
+    }
+
+    #errors {
+      margin: 14px 0 0;
+      padding: 12px 14px;
+      color: var(--danger);
+      background: var(--danger-bg);
+      border-radius: 12px;
+    }
+
+    #errors ul {
+      margin: 0;
+      padding-left: 1.2rem;
+    }
+
+    #status {
+      margin: 14px 0 0;
+      color: var(--accent-dark);
+      font-weight: 700;
+    }
+
+    .note {
+      margin-top: 16px;
+      padding: 14px 16px;
+      background: rgba(255, 253, 249, 0.7);
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+    }
+
+    @media (max-width: 720px) {
+      .fields { grid-template-columns: 1fr; }
+      main { width: min(100% - 20px, 980px); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>オプションExcel作成</h1>
+      <p>品名と値段を入れると、オプションNoは1から自動で付きます。Excelでは番号をカンマ区切りで1つのセルに入れると、品目リストと合計金額が作られます。</p>
+    </header>
+
+    <section class="card">
+      <div class="fields">
+        <label class="field">
+          仕様名
+          <input id="specName" type="text" autocomplete="off" placeholder="例: 標準仕様A">
+        </label>
+        <label class="field">
+          本体価格
+          <input id="basePrice" type="text" inputmode="decimal" autocomplete="off" placeholder="例: 2500000">
+        </label>
+        <label class="field">
+          入力行数
+          <select id="inputRows">
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="300" selected>300</option>
+            <option value="500">500</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint">本体価格はExcelの総合計に含まれます。入力行数は、カンマ区切りの番号から作る品目リストの最大件数です。</p>
+    </section>
+
+    <section class="card">
+      <div class="table-head">
+        <h2>オプション一覧</h2>
+        <p id="optionCount" class="hint"></p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>オプションNo</th>
+              <th>品名</th>
+              <th>値段</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="optionRows"></tbody>
+        </table>
+      </div>
+      <p class="hint">オプションNoは上から1、2、3…と付きます。Excelでは 1,2,3 のようにカンマで区切って入力します。</p>
+      <div class="table-actions">
+        <button id="addRow" type="button">行を追加</button>
+      </div>
+      <div id="errors" role="alert" hidden></div>
+      <p id="status" hidden></p>
+      <div class="actions" style="margin-top: 16px;">
+        <button id="saveJson" type="button">一覧を保存</button>
+        <label class="file-button">
+          一覧を読み込む
+          <input id="loadJson" type="file" accept="application/json,.json">
+        </label>
+        <button id="buildExcel" class="primary" type="button">Excelを作成</button>
+      </div>
+    </section>
+
+    <aside class="note">
+      <p>このフォルダごとPCにコピーし、index.html を開いてください。インストールは不要です。作成したExcelは Excel 2016 以降で使えます。マクロは使用していません。</p>
+    </aside>
+  </main>
+  <script src="excel-builder.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

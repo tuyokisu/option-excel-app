@@ -1,0 +1,4 @@
+test-output/
+*.xlsx
+.DS_Store
+Thumbs.db

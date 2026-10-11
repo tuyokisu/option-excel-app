@@ -1,0 +1,9 @@
+{
+  "name": "option-excel-app",
+  "private": true,
+  "version": "1.0.0",
+  "description": "オプション一覧から数式入りExcelを作るローカルアプリ",
+  "scripts": {
+    "test": "node --test test/build-workbook.test.js"
+  }
+}
