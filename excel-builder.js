@@ -814,6 +814,277 @@
     throw new Error("CRC32 self-check failed");
   }
 
+  function decodeXml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, function (_, num) {
+        return String.fromCharCode(Number(num));
+      })
+      .replace(/&amp;/g, "&");
+  }
+
+  function inflateRaw(bytes) {
+    if (typeof DecompressionStream !== "function") {
+      return Promise.reject(new Error("このブラウザではExcelを解けません。Edge または Chrome を使ってください。"));
+    }
+    var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Response(stream).arrayBuffer().then(function (buffer) {
+      return new Uint8Array(buffer);
+    });
+  }
+
+  function findEocd(bytes) {
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var min = Math.max(0, bytes.length - 65557);
+    var i;
+    for (i = bytes.length - 22; i >= min; i -= 1) {
+      if (view.getUint32(i, true) === 0x06054b50) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function unzipXlsx(buffer) {
+    var bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var eocd = findEocd(bytes);
+    if (eocd < 0) {
+      return Promise.reject(new Error("Excelファイルの形式が正しくありません。"));
+    }
+    var count = view.getUint16(eocd + 10, true);
+    var central = view.getUint32(eocd + 16, true);
+    var jobs = [];
+    var i;
+    var offset = central;
+    for (i = 0; i < count; i += 1) {
+      if (view.getUint32(offset, true) !== 0x02014b50) {
+        return Promise.reject(new Error("Excelファイルを分解できませんでした。"));
+      }
+      var method = view.getUint16(offset + 10, true);
+      var compressedSize = view.getUint32(offset + 20, true);
+      var nameLength = view.getUint16(offset + 28, true);
+      var extraLength = view.getUint16(offset + 30, true);
+      var commentLength = view.getUint16(offset + 32, true);
+      var localOffset = view.getUint32(offset + 42, true);
+      var name = new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
+      var localNameLength = view.getUint16(localOffset + 26, true);
+      var localExtraLength = view.getUint16(localOffset + 28, true);
+      var dataStart = localOffset + 30 + localNameLength + localExtraLength;
+      var payload = bytes.subarray(dataStart, dataStart + compressedSize);
+      jobs.push({ name: name, method: method, payload: payload });
+      offset += 46 + nameLength + extraLength + commentLength;
+    }
+
+    return Promise.all(
+      jobs.map(function (job) {
+        var raw =
+          job.method === 0
+            ? Promise.resolve(job.payload)
+            : job.method === 8
+              ? inflateRaw(job.payload)
+              : Promise.reject(new Error("未対応のExcel圧縮形式です。"));
+        return raw.then(function (data) {
+          return [job.name.replace(/^\/+/, ""), new TextDecoder("utf-8").decode(data)];
+        });
+      })
+    ).then(function (entries) {
+      var files = Object.create(null);
+      entries.forEach(function (entry) {
+        files[entry[0]] = entry[1];
+      });
+      return files;
+    });
+  }
+
+  function parseSharedStrings(xml) {
+    var strings = [];
+    if (!xml) {
+      return strings;
+    }
+    var siRe = /<si\b[^>]*>([\s\S]*?)<\/si>/g;
+    var block;
+    while ((block = siRe.exec(xml))) {
+      var texts = [];
+      var tRe = /<t\b[^>]*>([\s\S]*?)<\/t>/g;
+      var tBlock;
+      while ((tBlock = tRe.exec(block[1]))) {
+        texts.push(decodeXml(tBlock[1]));
+      }
+      strings.push(texts.join(""));
+    }
+    return strings;
+  }
+
+  function cellRefParts(ref) {
+    var match = /^([A-Z]+)(\d+)$/i.exec(String(ref || ""));
+    if (!match) {
+      return null;
+    }
+    return { col: match[1].toUpperCase(), row: Number(match[2]) };
+  }
+
+  function sheetCellValue(cellXml, shared) {
+    var typeMatch = /\bt="([^"]+)"/.exec(cellXml);
+    var type = typeMatch ? typeMatch[1] : "";
+    if (type === "inlineStr") {
+      var inline = /<t\b[^>]*>([\s\S]*?)<\/t>/.exec(cellXml);
+      return inline ? decodeXml(inline[1]) : "";
+    }
+    var valueMatch = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(cellXml);
+    if (!valueMatch) {
+      return "";
+    }
+    var raw = decodeXml(valueMatch[1]);
+    if (type === "s") {
+      var index = Number(raw);
+      return shared[index] == null ? "" : String(shared[index]);
+    }
+    return raw;
+  }
+
+  function parseSheetGrid(xml, shared) {
+    var grid = Object.create(null);
+    if (!xml) {
+      return grid;
+    }
+    var cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>/g;
+    var match;
+    while ((match = cellRe.exec(xml))) {
+      var attrs = match[1];
+      var refMatch = /\br="([^"]+)"/.exec(attrs);
+      if (!refMatch) {
+        continue;
+      }
+      var parts = cellRefParts(refMatch[1]);
+      if (!parts) {
+        continue;
+      }
+      if (!grid[parts.row]) {
+        grid[parts.row] = Object.create(null);
+      }
+      grid[parts.row][parts.col] = sheetCellValue(attrs + ">" + match[2], shared);
+    }
+    return grid;
+  }
+
+  function looksLikeHeader(a, b, c) {
+    var text = (a + " " + b + " " + c).replace(/\s+/g, "");
+    return /ナンバー|オプションNo|品名|品目|売価|値段|^No$/i.test(text);
+  }
+
+  function optionsFromGrid(grid) {
+    var rows = Object.keys(grid)
+      .map(Number)
+      .filter(function (n) {
+        return n > 0;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var options = [];
+    var started = false;
+    rows.forEach(function (rowNum) {
+      var row = grid[rowNum] || {};
+      var no = trimText(row.A);
+      var name = trimText(row.B);
+      var price = trimText(row.C);
+      if (!started && looksLikeHeader(no, name, price)) {
+        return;
+      }
+      if (!no && !name && !price) {
+        return;
+      }
+      if (no === "仕様名" || no === "本体価格" || no === "オプションNo" || no === "品目リスト") {
+        return;
+      }
+      started = true;
+      options.push({ no: no, name: name, price: price });
+    });
+    return options;
+  }
+
+  function parseWorkbookSheets(files) {
+    var workbook = files["xl/workbook.xml"] || "";
+    var rels = files["xl/_rels/workbook.xml.rels"] || "";
+    var ridToTarget = Object.create(null);
+    var relRe = /<Relationship\b([^>]*)\/?>/g;
+    var rel;
+    while ((rel = relRe.exec(rels))) {
+      var idMatch = /\bId="([^"]+)"/.exec(rel[1]);
+      var targetMatch = /\bTarget="([^"]+)"/.exec(rel[1]);
+      if (idMatch && targetMatch) {
+        var target = targetMatch[1].replace(/^\//, "");
+        if (target.indexOf("xl/") !== 0) {
+          target = "xl/" + target.replace(/^\.\//, "");
+        }
+        ridToTarget[idMatch[1]] = target;
+      }
+    }
+    var sheets = [];
+    var sheetRe = /<sheet\b([^>]*)\/?>/g;
+    var sheet;
+    while ((sheet = sheetRe.exec(workbook))) {
+      var nameMatch = /\bname="([^"]+)"/.exec(sheet[1]);
+      var ridMatch = /\br:id="([^"]+)"/.exec(sheet[1]);
+      if (!nameMatch || !ridMatch || !ridToTarget[ridMatch[1]]) {
+        continue;
+      }
+      sheets.push({
+        name: decodeXml(nameMatch[1]),
+        path: ridToTarget[ridMatch[1]],
+      });
+    }
+    return sheets;
+  }
+
+  function readXlsxOptions(buffer) {
+    return unzipXlsx(buffer).then(function (files) {
+      var shared = parseSharedStrings(files["xl/sharedStrings.xml"]);
+      var sheets = parseWorkbookSheets(files);
+      if (sheets.length === 0) {
+        throw new Error("Excelにシートが見つかりませんでした。");
+      }
+      var master =
+        sheets.filter(function (sheet) {
+          return sheet.name === "マスタ";
+        })[0] || sheets[0];
+      var options = optionsFromGrid(parseSheetGrid(files[master.path], shared));
+      if (options.length === 0 && sheets[0] && sheets[0] !== master) {
+        options = optionsFromGrid(parseSheetGrid(files[sheets[0].path], shared));
+      }
+      if (options.length === 0) {
+        throw new Error("A列ナンバー、B列品目、C列売価のデータが見つかりませんでした。");
+      }
+
+      var specName = "";
+      var basePrice = "";
+      var inputSheet = sheets.filter(function (sheet) {
+        return sheet.name === "入力";
+      })[0];
+      if (inputSheet && files[inputSheet.path]) {
+        var inputGrid = parseSheetGrid(files[inputSheet.path], shared);
+        var row1 = inputGrid[1] || {};
+        var row2 = inputGrid[2] || {};
+        if (trimText(row1.A) === "仕様名") {
+          specName = trimText(row1.B);
+        }
+        if (trimText(row2.A) === "本体価格") {
+          basePrice = trimText(row2.B);
+        }
+      }
+
+      return {
+        specName: specName,
+        basePrice: basePrice,
+        options: options,
+      };
+    });
+  }
+
   return {
     ALLOWED_INPUT_ROWS: ALLOWED_INPUT_ROWS,
     buildOptionWorkbook: buildOptionWorkbook,
@@ -823,5 +1094,6 @@
     parsePrice: parsePrice,
     splitOptionCodes: splitOptionCodes,
     previewOptionSelection: previewOptionSelection,
+    readXlsxOptions: readXlsxOptions,
   };
 });

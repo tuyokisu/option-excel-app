@@ -68,9 +68,22 @@ function listSaves() {
     .sort((a, b) => a.localeCompare(b, "ja"));
 }
 
+function listExcels() {
+  fs.mkdirSync(EXCEL_DIR, { recursive: true });
+  return fs
+    .readdirSync(EXCEL_DIR)
+    .filter((name) => name.toLowerCase().endsWith(".xlsx"))
+    .sort((a, b) => a.localeCompare(b, "ja"));
+}
+
 function handleApi(req, res, url) {
   if (url.pathname === "/api/saves" && req.method === "GET") {
     sendJson(res, 200, { files: listSaves() });
+    return;
+  }
+
+  if (url.pathname === "/api/excels" && req.method === "GET") {
+    sendJson(res, 200, { files: listExcels() });
     return;
   }
 
@@ -79,6 +92,21 @@ function handleApi(req, res, url) {
     const filename = safeName(excelMatch[1], ".xlsx");
     if (!filename) {
       sendJson(res, 400, { error: "invalid filename" });
+      return;
+    }
+    const excelPath = path.join(EXCEL_DIR, filename);
+    if (req.method === "GET") {
+      if (!fs.existsSync(excelPath)) {
+        sendJson(res, 404, { error: "file not found" });
+        return;
+      }
+      const bytes = fs.readFileSync(excelPath);
+      res.writeHead(200, Object.assign(corsHeaders(), {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Length": bytes.length,
+        "Cache-Control": "no-store",
+      }));
+      res.end(bytes);
       return;
     }
     if (req.method !== "PUT") {
@@ -91,7 +119,7 @@ function handleApi(req, res, url) {
         return;
       }
       fs.mkdirSync(EXCEL_DIR, { recursive: true });
-      fs.writeFileSync(path.join(EXCEL_DIR, filename), bytes);
+      fs.writeFileSync(excelPath, bytes);
       sendJson(res, 200, { ok: true, name: filename });
     });
     return;

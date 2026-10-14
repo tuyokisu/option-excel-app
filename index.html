@@ -82,6 +82,7 @@
     }
 
     input[type="text"],
+    input[type="search"],
     select {
       width: 100%;
       padding: 10px 12px;
@@ -115,12 +116,12 @@
 
     .table-wrap { overflow-x: auto; }
 
-    #optionTableWrap.compact {
+    .table-wrap.compact {
       max-height: 22.5rem;
       overflow: auto;
     }
 
-    #optionTableWrap.compact thead th {
+    .table-wrap.compact thead th {
       position: sticky;
       top: 0;
       z-index: 1;
@@ -161,7 +162,9 @@
 
     .actions,
     .table-actions,
-    .save-load {
+    .save-load,
+    .io-actions,
+    .folder-row {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
@@ -169,6 +172,37 @@
     }
 
     .table-actions { margin-top: 12px; }
+
+    .io-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .io-panel {
+      padding: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+
+    .io-panel h3 {
+      margin: 0 0 6px;
+      font-size: 0.95rem;
+    }
+
+    .io-panel .hint {
+      margin: 0 0 10px;
+    }
+
+    .folder-row {
+      margin-top: 4px;
+    }
+
+    .io-actions {
+      margin-top: 10px;
+    }
 
     .save-load {
       margin-top: 12px;
@@ -184,15 +218,94 @@
       background: #fff;
     }
 
+    .file-picker {
+      position: relative;
+      width: 100%;
+    }
+
+    .file-picker-toggle {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid #d9d0c3;
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    .file-picker-toggle::after {
+      content: "▾";
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    .file-picker-menu {
+      display: none;
+      position: absolute;
+      z-index: 20;
+      left: 0;
+      right: 0;
+      margin-top: 4px;
+      padding: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+    }
+
+    .file-picker.is-open .file-picker-menu {
+      display: block;
+    }
+
+    .file-picker-search {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #d9d0c3;
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .file-picker-list {
+      margin: 8px 0 0;
+      padding: 0;
+      list-style: none;
+      max-height: 12.5rem;
+      overflow-y: auto;
+    }
+
+    .file-picker-list li {
+      margin: 0;
+      padding: 8px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .file-picker-list li:last-child {
+      border-bottom: 0;
+    }
+
+    .file-picker-list li:hover,
+    .file-picker-list li.is-selected {
+      background: var(--soft);
+    }
+
+    .file-picker-list .empty {
+      cursor: default;
+      color: var(--muted);
+    }
+
     #saveFolderStatus {
-      flex: 1 1 100%;
+      flex: 1 1 220px;
       margin: 0;
       font-size: 0.92rem;
       color: var(--muted);
     }
 
-    button,
-    .file-button {
+    button {
       appearance: none;
       border: 1px solid transparent;
       border-radius: 999px;
@@ -216,10 +329,6 @@
       border-color: #d9d0c3;
       color: var(--muted);
       font-weight: 600;
-    }
-
-    .file-button input {
-      display: none;
     }
 
     #errors {
@@ -324,43 +433,45 @@
       margin-top: 10px;
     }
 
-    .dialog-backdrop {
+    .done-toast {
       position: fixed;
-      inset: 0;
-      z-index: 40;
-      display: none;
+      top: 16px;
+      left: 50%;
+      z-index: 2000;
+      display: none !important;
       align-items: center;
-      justify-content: center;
-      padding: 20px;
-      background: rgba(28, 25, 21, 0.38);
-    }
-
-    .dialog-backdrop:not([hidden]) {
-      display: flex;
-    }
-
-    .dialog-card {
-      width: min(420px, 100%);
-      padding: 22px 22px 18px;
+      gap: 12px;
+      width: min(520px, calc(100% - 24px));
+      padding: 12px 14px;
+      transform: translateX(-50%);
       background: var(--paper);
-      border-radius: 16px;
+      border: 1px solid var(--accent);
+      border-radius: 14px;
       box-shadow: var(--shadow);
     }
 
-    .dialog-card p {
-      margin: 0 0 16px;
+    .done-toast.is-open {
+      display: flex !important;
+    }
+
+    .done-toast p {
+      margin: 0;
+      flex: 1 1 auto;
       font-weight: 700;
       white-space: pre-line;
     }
 
-    .dialog-card button {
-      width: 100%;
+    .done-toast button {
+      flex: 0 0 auto;
+      width: auto;
+      min-width: 4.5rem;
     }
 
     @media (max-width: 720px) {
       .fields { grid-template-columns: 1fr; }
       .totals { grid-template-columns: 1fr; }
       main { width: min(100% - 20px, 980px); }
+      .io-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -412,28 +523,53 @@
           <tbody id="optionRows"></tbody>
         </table>
       </div>
-      <p class="hint">オプションNoは最初から番号順に入っています。変更もできます。行を追加すると次の番号が入ります。Excelでは 1,2,3 のようにカンマで区切って入力します。</p>
+      <p class="hint">オプションNoは最初から番号順に入っています。変更もできます。行を追加すると次の番号が入ります。</p>
       <div class="table-actions">
         <button id="addRow" type="button">行を追加</button>
       </div>
-      <div id="errors" role="alert" hidden></div>
-      <p id="status" hidden></p>
-      <div class="save-load">
+    </section>
+
+    <section class="card">
+      <div class="table-head">
+        <h2>読み込みと保存</h2>
+      </div>
+      <div class="folder-row">
         <button id="linkSaveFolder" type="button">このアプリのフォルダを指定</button>
         <p id="saveFolderStatus">初回だけ、index.html が入っているフォルダを選んでください。bat は使いません。</p>
-        <select id="savedFileSelect" hidden aria-label="保存済み一覧">
-          <option value="">保存済みを選ぶ</option>
-        </select>
-        <button id="loadSavedFile" type="button" hidden>選んで読み込む</button>
-        <button id="refreshSavedFiles" type="button" hidden>一覧を更新</button>
       </div>
-      <div class="actions" style="margin-top: 16px;">
-        <button id="saveJson" type="button">saveする</button>
-        <label class="file-button">
-          別ファイルから読み込む
-          <input id="loadJson" type="file" accept="application/json,.json">
-        </label>
-        <button id="buildExcel" class="primary" type="button">Excelを作成</button>
+      <div id="errors" role="alert" hidden></div>
+      <p id="status" hidden></p>
+      <div class="io-grid">
+        <div class="io-panel">
+          <h3>saveデータ（JSON）</h3>
+          <p class="hint">途中の入力を保存・再開します。</p>
+          <div id="savedFilePicker" class="file-picker" hidden>
+            <button id="savedFileToggle" class="file-picker-toggle" type="button" aria-expanded="false" aria-haspopup="listbox">保存済みを選ぶ</button>
+            <div id="savedFileMenu" class="file-picker-menu">
+              <input id="savedFileSearch" class="file-picker-search" type="search" autocomplete="off" placeholder="キーワードで検索">
+              <ul id="savedFileList" class="file-picker-list" role="listbox" aria-label="保存済み一覧"></ul>
+            </div>
+          </div>
+          <div class="io-actions">
+            <button id="loadSavedFile" type="button" hidden>選んで読み込む</button>
+            <button id="saveJson" type="button">saveする</button>
+          </div>
+        </div>
+        <div class="io-panel">
+          <h3>仕様書一覧（Excel）</h3>
+          <p class="hint">A列ナンバー、B列品目、C列売価。</p>
+          <div id="excelFilePicker" class="file-picker" hidden>
+            <button id="excelFileToggle" class="file-picker-toggle" type="button" aria-expanded="false" aria-haspopup="listbox">Excelを選ぶ</button>
+            <div id="excelFileMenu" class="file-picker-menu">
+              <input id="excelFileSearch" class="file-picker-search" type="search" autocomplete="off" placeholder="キーワードで検索">
+              <ul id="excelFileList" class="file-picker-list" role="listbox" aria-label="Excel一覧"></ul>
+            </div>
+          </div>
+          <div class="io-actions">
+            <button id="loadExcelFile" type="button" hidden>Excelを読み込む</button>
+            <button id="buildExcel" class="primary" type="button">Excelを作成</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -486,7 +622,7 @@
       </div>
       <p id="previewSelectedNames" class="preview-list"></p>
       <p id="previewEmpty" class="hint">仕様書のオプション一覧がある状態で、番号を入力してください。</p>
-      <div class="table-wrap" style="margin-top: 10px;">
+      <div id="previewTableWrap" class="table-wrap" style="margin-top: 10px;">
         <table>
           <thead>
             <tr>
@@ -505,11 +641,9 @@
       <p>フォルダごとPCにコピーし、index.html を Edge または Chrome で開いてください。初回だけこのアプリのフォルダを指定すると、saveデータ と 仕様書一覧 に保存できます。bat は不要です。</p>
     </aside>
   </main>
-  <div id="doneDialog" class="dialog-backdrop" hidden>
-    <div class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="doneDialogMessage">
-      <p id="doneDialogMessage"></p>
-      <button id="doneDialogOk" class="primary" type="button">OK</button>
-    </div>
+  <div id="doneDialog" class="done-toast" hidden role="status" aria-live="polite">
+    <p id="doneDialogMessage"></p>
+    <button id="doneDialogOk" class="primary" type="button">OK</button>
   </div>
   <script src="excel-builder.js"></script>
   <script src="app.js"></script>

@@ -9,6 +9,7 @@ const {
   sanitizeFilename,
   validateOptionInput,
   previewOptionSelection,
+  readXlsxOptions,
 } = require("../excel-builder");
 
 const appDir = path.join(__dirname, "..");
@@ -286,6 +287,24 @@ test("previews Excel totals from comma-separated option numbers", () => {
   assert.equal(preview.items[2].missing, true);
 });
 
+test("reads option rows from a generated workbook", async () => {
+  const built = buildOptionWorkbook({
+    specName: "標準仕様A",
+    basePrice: "2500000",
+    inputRows: 100,
+    options: sampleOptions,
+  });
+  const bytes = await built.xlsx.writeBuffer();
+  const parsed = await readXlsxOptions(bytes);
+  assert.equal(parsed.specName, "標準仕様A");
+  assert.equal(parsed.basePrice, "2500000");
+  assert.deepEqual(parsed.options, [
+    { no: "01", name: "サンルーフ", price: "50000" },
+    { no: "2", name: "カーナビ", price: "80000" },
+    { no: "10", name: "フロアマット", price: "12000" },
+  ]);
+});
+
 test("the page is a classic offline script", () => {
   const html = fs.readFileSync(path.join(appDir, "index.html"), "utf8");
   assert.equal(/https?:\/\//.test(html), false);
@@ -297,10 +316,11 @@ test("the page is a classic offline script", () => {
   assert.equal(html.includes('id="basePrice"'), true);
   assert.equal(html.includes("saveデータ"), true);
   assert.equal(html.includes('id="saveJson"'), true);
-  assert.equal(html.includes('id="loadJson"'), true);
+  assert.equal(html.includes('id="savedFileSearch"'), true);
   assert.equal(html.includes("index.html"), true);
   assert.equal(html.includes("仕様書一覧"), true);
   assert.equal(html.includes('id="selectedNos"'), true);
   assert.equal(html.includes('id="doneDialog"'), true);
   assert.equal(html.includes("仕様書の計算"), true);
+  assert.equal(html.includes('id="excelFilePicker"'), true);
 });
