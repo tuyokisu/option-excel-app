@@ -10,6 +10,7 @@ const {
   validateOptionInput,
   previewOptionSelection,
   readXlsxOptions,
+  writeCalcRowToXlsx,
 } = require("../excel-builder");
 
 const appDir = path.join(__dirname, "..");
@@ -287,6 +288,45 @@ test("previews Excel totals from comma-separated option numbers", () => {
   assert.equal(preview.items[2].missing, true);
 });
 
+test("writes calculation values into a chosen Excel row", async () => {
+  const built = buildOptionWorkbook({
+    specName: "標準仕様A",
+    basePrice: 100,
+    inputRows: 100,
+    options: sampleOptions,
+  });
+  const source = await built.xlsx.writeBuffer();
+  const next = await writeCalcRowToXlsx(source, 4, {
+    a: 2500000,
+    b: "70,73",
+    c: 130000,
+  });
+  const files = unzipStore(next);
+  const input = files["xl/worksheets/sheet2.xml"];
+  assert.equal(input.includes('r="A4"'), true);
+  assert.equal(input.includes("<v>2500000</v>"), true);
+  assert.equal(input.includes("70,73"), true);
+  assert.equal(input.includes("<v>130000</v>"), true);
+  assert.equal(input.includes("コメ"), false);
+});
+
+test("keeps non-sequential Excel option numbers", async () => {
+  const built = buildOptionWorkbook({
+    specName: "欠番仕様",
+    basePrice: 1,
+    inputRows: 100,
+    options: [
+      { no: "70", name: "コメ", price: 900 },
+      { no: "73", name: "もち", price: 799 },
+    ],
+  });
+  const parsed = await readXlsxOptions(await built.xlsx.writeBuffer());
+  assert.deepEqual(
+    parsed.options.map((item) => item.no),
+    ["70", "73"]
+  );
+});
+
 test("reads option rows from a generated workbook", async () => {
   const built = buildOptionWorkbook({
     specName: "標準仕様A",
@@ -323,4 +363,9 @@ test("the page is a classic offline script", () => {
   assert.equal(html.includes('id="doneDialog"'), true);
   assert.equal(html.includes("仕様書の計算"), true);
   assert.equal(html.includes('id="excelFilePicker"'), true);
+  assert.equal(html.includes('id="exportRow"'), true);
+  assert.equal(html.includes('id="chooseExportExcel"'), true);
+  assert.equal(html.includes('id="exportSelectedName"'), true);
+  assert.equal(html.includes("エクセルに書き込む"), true);
+  assert.equal(html.includes('id="writeCalcRow"'), true);
 });

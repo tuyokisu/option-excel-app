@@ -40,9 +40,17 @@
   var loadExcelFileButton = document.getElementById("loadExcelFile");
   var excelFileNames = [];
   var selectedExcelFile = "";
+  var exportRowInput = document.getElementById("exportRow");
+  var exportTargetStatus = document.getElementById("exportTargetStatus");
+  var exportSelectedFile = document.getElementById("exportSelectedFile");
+  var exportSelectedName = document.getElementById("exportSelectedName");
+  var writeCalcRowButton = document.getElementById("writeCalcRow");
+  var chooseExportExcelButton = document.getElementById("chooseExportExcel");
+  var exportFileHandle = null;
   var SAVE_DIR_DB = "option-excel-app";
   var SAVE_DIR_STORE = "handles";
   var APP_DIR_KEY = "app-root";
+  var EXPORT_FILE_KEY = "export-xlsx";
   var appDirHandle = null;
   var saveDirHandle = null;
   var excelDirHandle = null;
@@ -551,6 +559,84 @@
     excelFileSearch.focus();
   }
 
+  function updateExportTargetStatus() {
+    var name = exportFileHandle && exportFileHandle.name ? exportFileHandle.name : "";
+    if (exportSelectedName) {
+      exportSelectedName.textContent = name || "未選択";
+    }
+    if (exportSelectedFile) {
+      exportSelectedFile.classList.toggle("is-ready", Boolean(name));
+      exportSelectedFile.classList.toggle("is-empty", !name);
+    }
+    if (chooseExportExcelButton) {
+      chooseExportExcelButton.textContent = name ? "選び直す" : "PCのExcelを選ぶ";
+    }
+    if (exportTargetStatus) {
+      exportTargetStatus.textContent = name
+        ? "このファイルに書き込みます（読み込み用のExcelとは別です）"
+        : "まだ選んでいません。「PCのExcelを選ぶ」を押してください。";
+    }
+  }
+
+  async function useExportFileHandle(handle) {
+    if (!handle) {
+      return false;
+    }
+    if (!/\.xlsx$/i.test(handle.name || "")) {
+      showErrors(["書き込み先は .xlsx を選んでください。"]);
+      return false;
+    }
+    var ok = await ensureSaveDirPermission(handle, "readwrite");
+    if (!ok) {
+      return false;
+    }
+    exportFileHandle = handle;
+    await storeHandle(EXPORT_FILE_KEY, handle);
+    updateExportTargetStatus();
+    return true;
+  }
+
+  async function chooseExportExcelFile() {
+    if (typeof window.showOpenFilePicker !== "function") {
+      showErrors(["Edge または Chrome で index.html を開いてください。"]);
+      return;
+    }
+    try {
+      var handles = await window.showOpenFilePicker({
+        id: "option-excel-export",
+        multiple: false,
+        types: [
+          {
+            description: "Excel",
+            accept: {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+            },
+          },
+        ],
+      });
+      if (await useExportFileHandle(handles && handles[0])) {
+        showErrors([]);
+        setStatus("書き込み先に設定しました: " + exportFileHandle.name);
+      }
+    } catch (error) {
+      if (error && error.name !== "AbortError") {
+        showErrors([error.message || "書き込み先のExcelを選べませんでした。"]);
+      }
+    }
+  }
+
+  async function restoreExportExcelFile() {
+    try {
+      var stored = await readStoredHandle(EXPORT_FILE_KEY);
+      if (stored) {
+        await useExportFileHandle(stored);
+      }
+    } catch (error) {
+      exportFileHandle = null;
+    }
+    updateExportTargetStatus();
+  }
+
   function renderExcelFileList() {
     excelFileToggle.textContent = excelFileToggleLabel();
     var keyword = excelFileSearch.value.trim().toLowerCase();
@@ -929,10 +1015,7 @@
         return;
       }
       nextRows.push({
-        no:
-          item.no == null || String(item.no).trim() === ""
-            ? String(i + 1)
-            : String(item.no),
+        no: item.no == null ? "" : String(item.no).trim(),
         name: item.name == null ? "" : String(item.name),
         price: item.price == null ? "" : String(item.price),
       });
@@ -981,6 +1064,48 @@
       .replace(/\.(xlsx|xlsm)$/i, "")
       .replace(/_オプション$/, "")
       .trim();
+  }
+
+  async function writeSelectedCalcRow() {
+    showErrors([]);
+    if (!lastPreview || !lastPreview.selectedNosText) {
+      showErrors(["先に選ぶオプションNoを入力してください。"]);
+      return;
+    }
+    var row = Number(exportRowInput && exportRowInput.value);
+    if (!Number.isInteger(row) || row < 1) {
+      showErrors(["書き込む行は 1 以上の整数にしてください。"]);
+      return;
+    }
+    if (!api || typeof api.writeCalcRowToXlsx !== "function") {
+      showErrors(["Excelへの書き込みに必要なファイルがありません。"]);
+      return;
+    }
+    try {
+      if (!exportFileHandle) {
+        showErrors(["書き込み先は、読み込み用とは別のExcelを「PCのExcelを選ぶ」から指定してください。"]);
+        return;
+      }
+      if (!(await useExportFileHandle(exportFileHandle))) {
+        showErrors(["書き込み先のExcelへのアクセスが切れました。もう一度選んでください。"]);
+        return;
+      }
+      var name = exportFileHandle.name;
+      var file = await exportFileHandle.getFile();
+      var source = await file.arrayBuffer();
+      var next = await api.writeCalcRowToXlsx(source, row, {
+        a: lastPreview.basePrice,
+        b: lastPreview.selectedNosText,
+        c: lastPreview.optionTotal,
+      });
+      var writable = await exportFileHandle.createWritable();
+      await writable.write(next);
+      await writable.close();
+      setStatus(name + " の " + row + " 行目（A〜C）に書き込みました。");
+      showDonePopup("Excelへ書き込みました。\n" + name + " の " + row + " 行目");
+    } catch (error) {
+      showErrors([error && error.message ? error.message : "Excelへ書き込めませんでした。"]);
+    }
   }
 
   function applyExcelBuffer(buffer, filename) {
@@ -1171,6 +1296,16 @@
   loadExcelFileButton.addEventListener("click", function () {
     loadSelectedExcelFile();
   });
+  if (writeCalcRowButton) {
+    writeCalcRowButton.addEventListener("click", function () {
+      writeSelectedCalcRow();
+    });
+  }
+  if (chooseExportExcelButton) {
+    chooseExportExcelButton.addEventListener("click", function () {
+      chooseExportExcelFile();
+    });
+  }
   savedFileToggle.addEventListener("click", function () {
     if (savedFilePicker.classList.contains("is-open")) {
       closeSavedFileMenu();
@@ -1249,4 +1384,5 @@
   render();
   updatePreview();
   initSaveFolder();
+  restoreExportExcelFile();
 })();

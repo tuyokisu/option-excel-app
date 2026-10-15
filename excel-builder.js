@@ -927,11 +927,43 @@
     return { col: match[1].toUpperCase(), row: Number(match[2]) };
   }
 
+  function colLettersToIndex(letters) {
+    var n = 0;
+    var i;
+    var text = String(letters || "").toUpperCase();
+    for (i = 0; i < text.length; i += 1) {
+      n = n * 26 + (text.charCodeAt(i) - 64);
+    }
+    return n;
+  }
+
+  function indexToCol(index) {
+    var n = Number(index);
+    var text = "";
+    while (n > 0) {
+      var rem = (n - 1) % 26;
+      text = String.fromCharCode(65 + rem) + text;
+      n = Math.floor((n - 1) / 26);
+    }
+    return text;
+  }
+
+  function normalizeImportedNo(value) {
+    var text = trimText(value);
+    if (!text) {
+      return "";
+    }
+    if (/^\d+\.0+$/.test(text)) {
+      return text.replace(/\.0+$/, "");
+    }
+    return text;
+  }
+
   function sheetCellValue(cellXml, shared) {
     var typeMatch = /\bt="([^"]+)"/.exec(cellXml);
     var type = typeMatch ? typeMatch[1] : "";
-    if (type === "inlineStr") {
-      var inline = /<t\b[^>]*>([\s\S]*?)<\/t>/.exec(cellXml);
+    var inline = /<t\b[^>]*>([\s\S]*?)<\/t>/.exec(cellXml);
+    if (type === "inlineStr" || (!type && inline && cellXml.indexOf("<is") !== -1)) {
       return inline ? decodeXml(inline[1]) : "";
     }
     var valueMatch = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(cellXml);
@@ -951,22 +983,49 @@
     if (!xml) {
       return grid;
     }
-    var cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>/g;
-    var match;
-    while ((match = cellRe.exec(xml))) {
-      var attrs = match[1];
-      var refMatch = /\br="([^"]+)"/.exec(attrs);
-      if (!refMatch) {
-        continue;
+    var rowRe = /<(?:[\w]+:)?row\b([^>]*)>([\s\S]*?)<\/(?:[\w]+:)?row>/g;
+    var rowMatch;
+    while ((rowMatch = rowRe.exec(xml))) {
+      var rowAttr = /\br="(\d+)"/.exec(rowMatch[1]);
+      var rowNum = rowAttr ? Number(rowAttr[1]) : 0;
+      var colIndex = 0;
+      var cellRe = /<(?:[\w]+:)?c\b([^/>]*)(\/>|>([\s\S]*?)<\/(?:[\w]+:)?c>)/g;
+      var cellMatch;
+      while ((cellMatch = cellRe.exec(rowMatch[2]))) {
+        var attrs = cellMatch[1];
+        var inner = cellMatch[2] === "/>" ? "" : cellMatch[3] || "";
+        var refMatch = /\br="([^"]+)"/.exec(attrs);
+        var parts = refMatch ? cellRefParts(refMatch[1]) : null;
+        if (parts) {
+          rowNum = parts.row;
+          colIndex = colLettersToIndex(parts.col);
+        } else {
+          colIndex += 1;
+          if (!rowNum) {
+            continue;
+          }
+          parts = { col: indexToCol(colIndex), row: rowNum };
+        }
+        if (!grid[parts.row]) {
+          grid[parts.row] = Object.create(null);
+        }
+        grid[parts.row][parts.col] = sheetCellValue(attrs + ">" + inner, shared);
       }
-      var parts = cellRefParts(refMatch[1]);
-      if (!parts) {
-        continue;
+    }
+    if (Object.keys(grid).length === 0) {
+      var cellReAll = /<(?:[\w]+:)?c\b([^>]*)>([\s\S]*?)<\/(?:[\w]+:)?c>/g;
+      var match;
+      while ((match = cellReAll.exec(xml))) {
+        var ref = /\br="([^"]+)"/.exec(match[1]);
+        var cellParts = ref ? cellRefParts(ref[1]) : null;
+        if (!cellParts) {
+          continue;
+        }
+        if (!grid[cellParts.row]) {
+          grid[cellParts.row] = Object.create(null);
+        }
+        grid[cellParts.row][cellParts.col] = sheetCellValue(match[1] + ">" + match[2], shared);
       }
-      if (!grid[parts.row]) {
-        grid[parts.row] = Object.create(null);
-      }
-      grid[parts.row][parts.col] = sheetCellValue(attrs + ">" + match[2], shared);
     }
     return grid;
   }
@@ -1002,7 +1061,7 @@
         return;
       }
       started = true;
-      options.push({ no: no, name: name, price: price });
+      options.push({ no: normalizeImportedNo(no), name: name, price: price });
     });
     return options;
   }
@@ -1048,13 +1107,28 @@
       if (sheets.length === 0) {
         throw new Error("Excelにシートが見つかりませんでした。");
       }
-      var master =
-        sheets.filter(function (sheet) {
-          return sheet.name === "マスタ";
-        })[0] || sheets[0];
-      var options = optionsFromGrid(parseSheetGrid(files[master.path], shared));
-      if (options.length === 0 && sheets[0] && sheets[0] !== master) {
-        options = optionsFromGrid(parseSheetGrid(files[sheets[0].path], shared));
+      var candidates = sheets.filter(function (sheet) {
+        return sheet.name !== "入力";
+      });
+      if (candidates.length === 0) {
+        candidates = sheets;
+      }
+      var namedMaster = candidates.filter(function (sheet) {
+        return sheet.name === "マスタ";
+      })[0];
+      var options = [];
+      if (namedMaster) {
+        options = optionsFromGrid(parseSheetGrid(files[namedMaster.path], shared));
+      }
+      if (options.length === 0) {
+        var best = [];
+        candidates.forEach(function (sheet) {
+          var rows = optionsFromGrid(parseSheetGrid(files[sheet.path], shared));
+          if (rows.length > best.length) {
+            best = rows;
+          }
+        });
+        options = best;
       }
       if (options.length === 0) {
         throw new Error("A列ナンバー、B列品目、C列売価のデータが見つかりませんでした。");
@@ -1085,6 +1159,85 @@
     });
   }
 
+  function pickWriteSheet(sheets) {
+    var named = sheets.filter(function (sheet) {
+      return sheet.name === "計算" || sheet.name === "一覧";
+    })[0];
+    if (named) {
+      return named;
+    }
+    var notMaster = sheets.filter(function (sheet) {
+      return sheet.name !== "マスタ";
+    });
+    return notMaster[0] || sheets[0];
+  }
+
+  function calcNumberCell(ref, value) {
+    var n = parsePrice(value);
+    if (!Number.isFinite(n)) {
+      n = 0;
+    }
+    return '<c r="' + ref + '"><v>' + n + "</v></c>";
+  }
+
+  function calcTextCell(ref, value) {
+    return '<c r="' + ref + '" t="inlineStr"><is><t>' + xmlText(value) + "</t></is></c>";
+  }
+
+  function calcRowXml(row, values) {
+    return (
+      '<row r="' +
+      row +
+      '">' +
+      calcNumberCell("A" + row, values.a) +
+      calcTextCell("B" + row, values.b) +
+      calcNumberCell("C" + row, values.c) +
+      "</row>"
+    );
+  }
+
+  function upsertSheetRow(sheetXml, row, values) {
+    var xml = sheetXml || "";
+    var newRow = calcRowXml(row, values);
+    var rowRe = new RegExp("<row\\b[^>]*\\br=\"" + row + "\"[^>]*>[\\s\\S]*?</row>");
+    if (rowRe.test(xml)) {
+      return xml.replace(rowRe, newRow);
+    }
+    if (xml.indexOf("<sheetData/>") !== -1) {
+      return xml.replace("<sheetData/>", "<sheetData>" + newRow + "</sheetData>");
+    }
+    if (xml.indexOf("</sheetData>") !== -1) {
+      return xml.replace("</sheetData>", newRow + "</sheetData>");
+    }
+    throw new Error("Excelシートへ書き込めませんでした。");
+  }
+
+  function writeCalcRowToXlsx(buffer, row, values) {
+    var rowNum = Number(row);
+    if (!Number.isInteger(rowNum) || rowNum < 1 || rowNum > 1000) {
+      return Promise.reject(new Error("行番号は 1〜1000 の整数にしてください。"));
+    }
+    return unzipXlsx(buffer).then(function (files) {
+      var sheets = parseWorkbookSheets(files);
+      if (sheets.length === 0) {
+        throw new Error("Excelにシートが見つかりませんでした。");
+      }
+      var target = pickWriteSheet(sheets);
+      if (!files[target.path]) {
+        throw new Error("書き込み先シートが見つかりませんでした。");
+      }
+      files[target.path] = upsertSheetRow(files[target.path], rowNum, {
+        a: values && values.a != null ? String(values.a) : "",
+        b: values && values.b != null ? String(values.b) : "",
+        c: values && values.c != null ? values.c : "",
+      });
+      var zipFiles = Object.keys(files).map(function (name) {
+        return { name: name, text: files[name] };
+      });
+      return buildZip(zipFiles);
+    });
+  }
+
   return {
     ALLOWED_INPUT_ROWS: ALLOWED_INPUT_ROWS,
     buildOptionWorkbook: buildOptionWorkbook,
@@ -1095,5 +1248,6 @@
     splitOptionCodes: splitOptionCodes,
     previewOptionSelection: previewOptionSelection,
     readXlsxOptions: readXlsxOptions,
+    writeCalcRowToXlsx: writeCalcRowToXlsx,
   };
 });

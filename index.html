@@ -83,6 +83,7 @@
 
     input[type="text"],
     input[type="search"],
+    input[type="number"],
     select {
       width: 100%;
       padding: 10px 12px;
@@ -200,8 +201,56 @@
       margin-top: 4px;
     }
 
-    .io-actions {
+    .io-actions,
+    .export-row {
       margin-top: 10px;
+    }
+
+    .export-box {
+      margin-top: 16px;
+      padding: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+
+    .export-box h3 {
+      margin: 0 0 6px;
+      font-size: 0.95rem;
+    }
+
+    .export-fields {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(120px, 0.45fr);
+      gap: 12px;
+      margin-top: 10px;
+      align-items: end;
+    }
+
+    .export-selected {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f7f4ee;
+    }
+
+    .export-selected.is-ready {
+      border-color: var(--accent);
+      background: var(--soft);
+    }
+
+    .export-selected-label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .export-selected strong {
+      display: block;
+      margin-top: 2px;
+      word-break: break-all;
     }
 
     .save-load {
@@ -472,6 +521,7 @@
       .totals { grid-template-columns: 1fr; }
       main { width: min(100% - 20px, 980px); }
       .io-grid { grid-template-columns: 1fr; }
+      .export-fields { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -622,6 +672,28 @@
       </div>
       <p id="previewSelectedNames" class="preview-list"></p>
       <p id="previewEmpty" class="hint">仕様書のオプション一覧がある状態で、番号を入力してください。</p>
+      <div class="export-box">
+        <h3>別のExcelへ書き込む</h3>
+        <p class="hint">読み込み用（仕様書一覧）とは別の、既存のExcelをPCから選びます。選んだファイルの指定行へ、A列＝本体価格、B列＝オプション番号、C列＝オプション価格 のみ書き込みます。違う仕様は行を変えて書き込みます（例: 2〜11行目）。</p>
+        <div class="export-fields">
+          <label class="field">
+            書き込み先のExcel（別ファイル）
+            <button id="chooseExportExcel" type="button">PCのExcelを選ぶ</button>
+          </label>
+          <label class="field">
+            書き込む行（A〜C列）
+            <input id="exportRow" type="number" min="1" max="1000" value="2" inputmode="numeric">
+          </label>
+        </div>
+        <div id="exportSelectedFile" class="export-selected is-empty">
+          <span class="export-selected-label">選択中のファイル</span>
+          <strong id="exportSelectedName">未選択</strong>
+        </div>
+        <p id="exportTargetStatus" class="hint">まだ選んでいません。「PCのExcelを選ぶ」を押してください。</p>
+        <div class="export-row">
+          <button id="writeCalcRow" class="primary" type="button">エクセルに書き込む</button>
+        </div>
+      </div>
       <div id="previewTableWrap" class="table-wrap" style="margin-top: 10px;">
         <table>
           <thead>
