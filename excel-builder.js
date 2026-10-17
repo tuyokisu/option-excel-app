@@ -695,6 +695,65 @@
     };
   }
 
+  function copyBytes(src) {
+    var out = new Uint8Array(src.length);
+    out.set(src);
+    return out;
+  }
+
+  function decodeText(bytes) {
+    if (!bytes || !bytes.length) {
+      return "";
+    }
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+      return new TextDecoder("utf-16le").decode(bytes);
+    }
+    if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+      return new TextDecoder("utf-16be").decode(bytes);
+    }
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+
+  function encodeText(text, encoding) {
+    if (encoding === "utf-16le") {
+      var i;
+      var out = new Uint8Array(2 + String(text).length * 2);
+      out[0] = 0xff;
+      out[1] = 0xfe;
+      for (i = 0; i < text.length; i += 1) {
+        var code = text.charCodeAt(i);
+        out[2 + i * 2] = code & 0xff;
+        out[3 + i * 2] = (code >> 8) & 0xff;
+      }
+      return out;
+    }
+    return new TextEncoder().encode(text);
+  }
+
+  function sniffWorkbook(buffer) {
+    var bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    if (bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b) {
+      return "xlsx";
+    }
+    if (
+      bytes.length >= 8 &&
+      bytes[0] === 0xd0 &&
+      bytes[1] === 0xcf &&
+      bytes[2] === 0x11 &&
+      bytes[3] === 0xe0
+    ) {
+      return "xls";
+    }
+    var head = decodeText(bytes.subarray(0, Math.min(bytes.length, 1200)));
+    if (
+      /urn:schemas-microsoft-com:office:spreadsheet/i.test(head) ||
+      /mso-application[^>]*Excel\.Sheet/i.test(head)
+    ) {
+      return "xmlss";
+    }
+    return "unknown";
+  }
+
   function buildZip(files) {
     var encoder = new TextEncoder();
     var stamp = dosDateTime(new Date(2026, 9, 11, 12, 0, 0));
@@ -703,8 +762,8 @@
     var offset = 0;
 
     files.forEach(function (file) {
-      var nameBytes = encoder.encode(file.name);
-      var data = encoder.encode(file.text);
+      var nameBytes = file.nameBytes ? file.nameBytes : encoder.encode(file.name);
+      var data = file.bytes ? file.bytes : encoder.encode(file.text);
       var crc = crc32(data);
       var local = concatBytes([
         u32(0x04034b50),
@@ -848,7 +907,7 @@
     return -1;
   }
 
-  function unzipXlsx(buffer) {
+  function unzipZip(buffer) {
     var bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
     var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     var eocd = findEocd(bytes);
@@ -888,7 +947,7 @@
               ? inflateRaw(job.payload)
               : Promise.reject(new Error("未対応のExcel圧縮形式です。"));
         return raw.then(function (data) {
-          return [job.name.replace(/^\/+/, ""), new TextDecoder("utf-8").decode(data)];
+          return [job.name.replace(/^\/+/, ""), copyBytes(data)];
         });
       })
     ).then(function (entries) {
@@ -898,6 +957,26 @@
       });
       return files;
     });
+  }
+
+  function unzipXlsx(buffer) {
+    return unzipZip(buffer).then(function (files) {
+      var textFiles = Object.create(null);
+      Object.keys(files).forEach(function (name) {
+        if (/\.(xml|rels)$/i.test(name) || name === "[Content_Types].xml") {
+          textFiles[name] = decodeText(files[name]);
+        }
+      });
+      return textFiles;
+    });
+  }
+
+  function xmlFromZip(files, name) {
+    return files[name] ? decodeText(files[name]) : "";
+  }
+
+  function putXmlInZip(files, name, xml) {
+    files[name] = encodeText(xml, "utf-8");
   }
 
   function parseSharedStrings(xml) {
@@ -1172,44 +1251,413 @@
     return notMaster[0] || sheets[0];
   }
 
-  function calcNumberCell(ref, value) {
+  function calcNumberValue(value) {
     var n = parsePrice(value);
-    if (!Number.isFinite(n)) {
-      n = 0;
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function cellStyleAttr(attrText) {
+    var match = /\bs="([^"]*)"/.exec(attrText || "");
+    return match ? ' s="' + match[1] + '"' : "";
+  }
+
+  function buildPatchedCell(ref, attrText, kind, value) {
+    var style = cellStyleAttr(attrText);
+    if (kind === "n") {
+      return '<c r="' + ref + '"' + style + "><v>" + calcNumberValue(value) + "</v></c>";
     }
-    return '<c r="' + ref + '"><v>' + n + "</v></c>";
-  }
-
-  function calcTextCell(ref, value) {
-    return '<c r="' + ref + '" t="inlineStr"><is><t>' + xmlText(value) + "</t></is></c>";
-  }
-
-  function calcRowXml(row, values) {
     return (
-      '<row r="' +
-      row +
-      '">' +
-      calcNumberCell("A" + row, values.a) +
-      calcTextCell("B" + row, values.b) +
-      calcNumberCell("C" + row, values.c) +
-      "</row>"
+      '<c r="' +
+      ref +
+      '"' +
+      style +
+      ' t="inlineStr"><is><t>' +
+      xmlText(value) +
+      "</t></is></c>"
     );
   }
 
-  function upsertSheetRow(sheetXml, row, values) {
+  var XML_ATTRS = '((?:[^>"/]|"[^"]*"|/(?!>))*)';
+
+  function elementRe(tag) {
+    return new RegExp("<" + tag + "\\b" + XML_ATTRS + "(/>|>([\\s\\S]*?)</" + tag + ">)", "g");
+  }
+
+  function parseRowCells(inner) {
+    var cells = [];
+    var re = elementRe("c");
+    var match;
+    while ((match = re.exec(inner || ""))) {
+      var attrs = match[1] || "";
+      var refMatch = /\br="([^"]+)"/.exec(attrs);
+      var parts = cellRefParts(refMatch ? refMatch[1] : "");
+      if (!parts) {
+        cells.push({ col: 9999, ref: "", xml: match[0], attrs: attrs });
+        continue;
+      }
+      cells.push({
+        col: colLettersToIndex(parts.col),
+        ref: parts.col + parts.row,
+        xml: match[0],
+        attrs: attrs,
+      });
+    }
+    return cells;
+  }
+
+  function applyCellsToRowInner(inner, row, patches) {
+    var cells = parseRowCells(inner);
+    patches.forEach(function (patch) {
+      var ref = patch.col + row;
+      var col = colLettersToIndex(patch.col);
+      var found = cells.filter(function (cell) {
+        return cell.ref === ref;
+      })[0];
+      if (found && /<f\b[^>]*\bt="shared"[^>]*\bref="/.test(found.xml)) {
+        throw new Error(
+          ref +
+            " は、ほかのセルと共有している数式の元になっています。上書きすると数式が壊れるため、書き込む行か列を変えてください。"
+        );
+      }
+      var nextXml = buildPatchedCell(ref, found ? found.attrs : "", patch.kind, patch.value);
+      if (found) {
+        found.xml = nextXml;
+        return;
+      }
+      cells.push({ col: col, ref: ref, xml: nextXml, attrs: "" });
+    });
+    cells.sort(function (a, b) {
+      return a.col - b.col;
+    });
+    return cells
+      .map(function (cell) {
+        return cell.xml;
+      })
+      .join("");
+  }
+
+  function rowOpenTag(attrText, row) {
+    var cleaned = String(attrText || "")
+      .replace(/\br="[^"]*"/g, "")
+      .replace(/\bspans="[^"]*"/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return '<row r="' + row + '"' + (cleaned ? " " + cleaned : "") + ">";
+  }
+
+  function insertRowXml(sheetDataInner, rowXml, row) {
+    var rowRe = elementRe("row");
+    var match;
+    var lastIndex = 0;
+    var chunks = [];
+    var inserted = false;
+    while ((match = rowRe.exec(sheetDataInner))) {
+      var attrs = match[1] || "";
+      var rMatch = /\br="(\d+)"/.exec(attrs);
+      var r = rMatch ? Number(rMatch[1]) : 0;
+      chunks.push(sheetDataInner.slice(lastIndex, match.index));
+      if (!inserted && r > row) {
+        chunks.push(rowXml);
+        inserted = true;
+      }
+      chunks.push(match[0]);
+      lastIndex = match.index + match[0].length;
+    }
+    chunks.push(sheetDataInner.slice(lastIndex));
+    if (!inserted) {
+      chunks.push(rowXml);
+    }
+    return chunks.join("");
+  }
+
+  function upsertSheetCells(sheetXml, row, patches) {
     var xml = sheetXml || "";
-    var newRow = calcRowXml(row, values);
-    var rowRe = new RegExp("<row\\b[^>]*\\br=\"" + row + "\"[^>]*>[\\s\\S]*?</row>");
-    if (rowRe.test(xml)) {
-      return xml.replace(rowRe, newRow);
+    var rowRe = elementRe("row");
+    var match;
+    var found = null;
+    while ((match = rowRe.exec(xml))) {
+      var attrs = match[1] || "";
+      var rMatch = /\br="(\d+)"/.exec(attrs);
+      if (rMatch && Number(rMatch[1]) === row) {
+        found = match;
+        break;
+      }
     }
-    if (xml.indexOf("<sheetData/>") !== -1) {
-      return xml.replace("<sheetData/>", "<sheetData>" + newRow + "</sheetData>");
+    var nextRow;
+    if (found) {
+      var inner = found[2] === "/>" ? "" : found[3] || "";
+      nextRow = rowOpenTag(found[1], row) + applyCellsToRowInner(inner, row, patches) + "</row>";
+      xml = xml.slice(0, found.index) + nextRow + xml.slice(found.index + found[0].length);
+    } else {
+      nextRow = rowOpenTag("", row) + applyCellsToRowInner("", row, patches) + "</row>";
+      if (xml.indexOf("<sheetData/>") !== -1) {
+        xml = xml.replace("<sheetData/>", "<sheetData>" + nextRow + "</sheetData>");
+      } else if (/<sheetData\b[\s\S]*<\/sheetData>/.test(xml)) {
+        xml = xml.replace(/<sheetData(\s[^>]*)?>([\s\S]*?)<\/sheetData>/, function (_, attrs, inner) {
+          return "<sheetData" + (attrs || "") + ">" + insertRowXml(inner, nextRow, row) + "</sheetData>";
+        });
+      } else {
+        throw new Error("Excelシートへ書き込めませんでした。");
+      }
     }
-    if (xml.indexOf("</sheetData>") !== -1) {
-      return xml.replace("</sheetData>", newRow + "</sheetData>");
+    return xml;
+  }
+
+  function stripCalcChain(files) {
+    Object.keys(files).forEach(function (name) {
+      if (/calcChain\.xml$/i.test(name)) {
+        delete files[name];
+      }
+    });
+    var typesName = Object.keys(files).filter(function (name) {
+      return name.toLowerCase() === "[content_types].xml";
+    })[0];
+    if (typesName) {
+      putXmlInZip(
+        files,
+        typesName,
+        xmlFromZip(files, typesName).replace(/<Override\b[^>]*calcChain\.xml"[^>]*\/>/gi, "")
+      );
     }
-    throw new Error("Excelシートへ書き込めませんでした。");
+    Object.keys(files).forEach(function (name) {
+      if (!/\.rels$/i.test(name)) {
+        return;
+      }
+      var rels = xmlFromZip(files, name);
+      if (rels.indexOf("calcChain") === -1) {
+        return;
+      }
+      putXmlInZip(
+        files,
+        name,
+        rels.replace(/<Relationship\b[^>]*calcChain\.xml"[^>]*\/>/gi, "")
+      );
+    });
+  }
+
+  function xmlssCellStyle(cellXml) {
+    var match = /ss:StyleID="([^"]*)"/.exec(cellXml || "");
+    return match ? match[1] : "";
+  }
+
+  function xmlssBuildCell(index, styleId, kind, value) {
+    var style = styleId ? ' ss:StyleID="' + styleId + '"' : "";
+    if (kind === "n") {
+      return (
+        '<Cell ss:Index="' +
+        index +
+        '"' +
+        style +
+        '><Data ss:Type="Number">' +
+        calcNumberValue(value) +
+        "</Data></Cell>"
+      );
+    }
+    return (
+      '<Cell ss:Index="' +
+      index +
+      '"' +
+      style +
+      '><Data ss:Type="String">' +
+      xmlText(value) +
+      "</Data></Cell>"
+    );
+  }
+
+  function upsertXmlssRow(tableInner, row, patches) {
+    var rowRe = elementRe("Row");
+    var match;
+    var implied = 0;
+    var found = null;
+    while ((match = rowRe.exec(tableInner))) {
+      var attrs = match[1] || "";
+      var indexMatch = /ss:Index="(\d+)"/.exec(attrs);
+      implied = indexMatch ? Number(indexMatch[1]) : implied + 1;
+      if (implied === row) {
+        found = { match: match, implied: implied };
+        break;
+      }
+    }
+    function applyInner(inner) {
+      var cellRe = elementRe("Cell");
+      var cells = [];
+      var cellMatch;
+      var col = 0;
+      while ((cellMatch = cellRe.exec(inner || ""))) {
+        var xml = cellMatch[0];
+        var idxMatch = /ss:Index="(\d+)"/.exec(xml);
+        col = idxMatch ? Number(idxMatch[1]) : col + 1;
+        cells.push({ index: col, xml: xml });
+      }
+      patches.forEach(function (patch) {
+        var existing = cells.filter(function (cell) {
+          return cell.index === patch.index;
+        })[0];
+        var styleId = existing ? xmlssCellStyle(existing.xml) : "";
+        var next = xmlssBuildCell(patch.index, styleId, patch.kind, patch.value);
+        if (existing) {
+          existing.xml = next;
+          return;
+        }
+        cells.push({ index: patch.index, xml: next });
+      });
+      cells.sort(function (a, b) {
+        return a.index - b.index;
+      });
+      return cells
+        .map(function (cell) {
+          return cell.xml;
+        })
+        .join("");
+    }
+    var nextRow = '<Row ss:Index="' + row + '">' + applyInner(found ? found.match[3] || "" : "") + "</Row>";
+    if (!found) {
+      return tableInner + nextRow;
+    }
+    return (
+      tableInner.slice(0, found.match.index) +
+      nextRow +
+      tableInner.slice(found.match.index + found.match[0].length)
+    );
+  }
+
+  function writeCalcRowToXmlss(bytes, row, values) {
+    var encoding =
+      bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le" : "utf-8";
+    var xml = decodeText(bytes);
+    var sheets = xml.match(/<Worksheet\b[\s\S]*?<\/Worksheet>/g) || [];
+    if (sheets.length === 0) {
+      throw new Error("Excelにシートが見つかりませんでした。");
+    }
+    var target = sheets.filter(function (sheet) {
+      return /ss:Name="計算"|ss:Name="一覧"/.test(sheet);
+    })[0] || sheets[0];
+    var tableMatch = /<Table\b[\s\S]*?<\/Table>/.exec(target);
+    if (!tableMatch) {
+      throw new Error("Excelシートへ書き込めませんでした。");
+    }
+    var openEnd = tableMatch[0].indexOf(">") + 1;
+    var closeAt = tableMatch[0].lastIndexOf("</Table>");
+    var patchedTable =
+      tableMatch[0].slice(0, openEnd) +
+      upsertXmlssRow(
+        tableMatch[0].slice(openEnd, closeAt),
+        row,
+        calcPatches(values).map(function (patch) {
+          return {
+            index: colLettersToIndex(patch.col),
+            kind: patch.kind,
+            value: patch.value,
+          };
+        })
+      ) +
+      tableMatch[0].slice(closeAt);
+    var patchedSheet = target.slice(0, tableMatch.index) + patchedTable + target.slice(tableMatch.index + tableMatch[0].length);
+    var sheetAt = xml.indexOf(target);
+    xml = xml.slice(0, sheetAt) + patchedSheet + xml.slice(sheetAt + target.length);
+    return encodeText(xml, encoding);
+  }
+
+  function loadXlsWriter() {
+    if (typeof window !== "undefined" && window.OptionXls) {
+      return window.OptionXls;
+    }
+    if (typeof require === "function") {
+      return require("./xls-writer.js");
+    }
+    throw new Error("xls-writer.js が読み込まれていません。");
+  }
+
+  function writeCalcRowToBinaryXls(bytes, row, values) {
+    var patches = calcPatches(values).map(function (patch) {
+      return {
+        col: colLettersToIndex(patch.col) - 1,
+        kind: patch.kind,
+        value: patch.kind === "n" ? calcNumberValue(patch.value) : String(patch.value),
+      };
+    });
+    return loadXlsWriter().writeXlsRow(bytes, row, patches);
+  }
+
+  function calcPatches(values) {
+    var source = values || {};
+    var patches = [];
+    function addText(col, value) {
+      var text = value == null ? "" : String(value).trim();
+      if (!text) {
+        return;
+      }
+      patches.push({ col: col, kind: "s", value: text });
+    }
+    addText("A", source.modelName);
+    addText("B", source.drawingNo);
+    addText("C", source.destination);
+    addText("D", source.workNo);
+    patches.push({ col: "E", kind: "n", value: source.a != null ? source.a : "" });
+    patches.push({ col: "G", kind: "s", value: source.b != null ? String(source.b) : "" });
+    patches.push({ col: "H", kind: "n", value: source.c != null ? source.c : "" });
+    return patches;
+  }
+
+  var CALC_PR_FOLLOWERS = [
+    "oleSize",
+    "customWorkbookViews",
+    "pivotCaches",
+    "smartTagPr",
+    "smartTagTypes",
+    "webPublishing",
+    "fileRecoveryPr",
+    "webPublishObjects",
+    "extLst",
+  ];
+
+  function forceFullCalcOnLoad(workbookXmlText) {
+    var xml = workbookXmlText || "";
+    var calcRe = /<((?:\w+:)?calcPr)\b([^>]*?)(\/?)>/;
+    var calc = calcRe.exec(xml);
+    if (calc) {
+      var attrs = calc[2].replace(/\s+fullCalcOnLoad="[^"]*"/g, "");
+      return (
+        xml.slice(0, calc.index) +
+        "<" +
+        calc[1] +
+        attrs +
+        ' fullCalcOnLoad="1"' +
+        calc[3] +
+        ">" +
+        xml.slice(calc.index + calc[0].length)
+      );
+    }
+    var root = /<((?:\w+:)?)workbook\b/.exec(xml);
+    var prefix = root ? root[1] : "";
+    var tag = "<" + prefix + 'calcPr fullCalcOnLoad="1"/>';
+    var insertAt = -1;
+    CALC_PR_FOLLOWERS.forEach(function (name) {
+      var at = xml.search(new RegExp("<" + prefix + name + "\\b"));
+      if (at !== -1 && (insertAt === -1 || at < insertAt)) {
+        insertAt = at;
+      }
+    });
+    if (insertAt === -1) {
+      insertAt = xml.lastIndexOf("</" + prefix + "workbook>");
+    }
+    if (insertAt === -1) {
+      throw new Error("Excelの再計算設定を書き込めませんでした。");
+    }
+    return xml.slice(0, insertAt) + tag + xml.slice(insertAt);
+  }
+
+  function isZipBytes(bytes) {
+    var data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    return data.length >= 2 && data[0] === 0x50 && data[1] === 0x4b;
+  }
+
+  function safeExportFilename(originalName, bytes) {
+    var name = String(originalName || "export.xlsx");
+    if (isZipBytes(bytes) && /\.xls$/i.test(name) && !/\.xlsx$/i.test(name) && !/\.xlsm$/i.test(name)) {
+      return name.replace(/\.xls$/i, ".xlsx");
+    }
+    return name;
   }
 
   function writeCalcRowToXlsx(buffer, row, values) {
@@ -1217,8 +1665,33 @@
     if (!Number.isInteger(rowNum) || rowNum < 1 || rowNum > 1000) {
       return Promise.reject(new Error("行番号は 1〜1000 の整数にしてください。"));
     }
-    return unzipXlsx(buffer).then(function (files) {
-      var sheets = parseWorkbookSheets(files);
+    var bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    var kind = sniffWorkbook(bytes);
+    if (kind === "xls") {
+      try {
+        return Promise.resolve(writeCalcRowToBinaryXls(bytes, rowNum, values || {}));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    if (kind === "xmlss") {
+      try {
+        return Promise.resolve(writeCalcRowToXmlss(bytes, rowNum, values || {}));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    if (kind !== "xlsx") {
+      return Promise.reject(new Error("対応しているのは .xlsx と、XML形式のExcelです。"));
+    }
+    return unzipZip(bytes).then(function (files) {
+      var xmlFiles = Object.create(null);
+      Object.keys(files).forEach(function (name) {
+        if (/\.(xml|rels)$/i.test(name) || name === "[Content_Types].xml") {
+          xmlFiles[name] = decodeText(files[name]);
+        }
+      });
+      var sheets = parseWorkbookSheets(xmlFiles);
       if (sheets.length === 0) {
         throw new Error("Excelにシートが見つかりませんでした。");
       }
@@ -1226,15 +1699,24 @@
       if (!files[target.path]) {
         throw new Error("書き込み先シートが見つかりませんでした。");
       }
-      files[target.path] = upsertSheetRow(files[target.path], rowNum, {
-        a: values && values.a != null ? String(values.a) : "",
-        b: values && values.b != null ? String(values.b) : "",
-        c: values && values.c != null ? values.c : "",
-      });
-      var zipFiles = Object.keys(files).map(function (name) {
-        return { name: name, text: files[name] };
-      });
-      return buildZip(zipFiles);
+      putXmlInZip(
+        files,
+        target.path,
+        upsertSheetCells(xmlFromZip(files, target.path), rowNum, calcPatches(values))
+      );
+      if (files["xl/workbook.xml"]) {
+        putXmlInZip(
+          files,
+          "xl/workbook.xml",
+          forceFullCalcOnLoad(xmlFromZip(files, "xl/workbook.xml"))
+        );
+      }
+      stripCalcChain(files);
+      return buildZip(
+        Object.keys(files).map(function (name) {
+          return { name: name, bytes: files[name] };
+        })
+      );
     });
   }
 
@@ -1249,5 +1731,7 @@
     previewOptionSelection: previewOptionSelection,
     readXlsxOptions: readXlsxOptions,
     writeCalcRowToXlsx: writeCalcRowToXlsx,
+    safeExportFilename: safeExportFilename,
+    forceFullCalcOnLoad: forceFullCalcOnLoad,
   };
 });

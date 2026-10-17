@@ -68,6 +68,13 @@
       gap: 16px;
     }
 
+    .meta-fields {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+
     label.field {
       display: flex;
       flex-direction: column;
@@ -517,7 +524,8 @@
     }
 
     @media (max-width: 720px) {
-      .fields { grid-template-columns: 1fr; }
+      .fields,
+      .meta-fields { grid-template-columns: 1fr; }
       .totals { grid-template-columns: 1fr; }
       main { width: min(100% - 20px, 980px); }
       .io-grid { grid-template-columns: 1fr; }
@@ -552,7 +560,25 @@
           </select>
         </label>
       </div>
-      <p class="hint">本体価格はExcelの総合計に含まれます。入力行数は、カンマ区切りの番号から作る品目リストの最大件数です。</p>
+      <div class="meta-fields">
+        <label class="field">
+          機種（任意）
+          <input id="modelName" type="text" autocomplete="off" placeholder="未入力可">
+        </label>
+        <label class="field">
+          図番（任意）
+          <input id="drawingNo" type="text" autocomplete="off" placeholder="未入力可">
+        </label>
+        <label class="field">
+          向け先（任意）
+          <input id="destination" type="text" autocomplete="off" placeholder="未入力可">
+        </label>
+        <label class="field">
+          作番（任意）
+          <input id="workNo" type="text" autocomplete="off" placeholder="未入力可">
+        </label>
+      </div>
+      <p class="hint">本体価格はExcelの総合計に含まれます。入力行数は、カンマ区切りの番号から作る品目リストの最大件数です。機種・図番・向け先・作番は空のままでも保存・書き込みできます。</p>
     </section>
 
     <section class="card">
@@ -674,14 +700,14 @@
       <p id="previewEmpty" class="hint">仕様書のオプション一覧がある状態で、番号を入力してください。</p>
       <div class="export-box">
         <h3>別のExcelへ書き込む</h3>
-        <p class="hint">読み込み用（仕様書一覧）とは別の、既存のExcelをPCから選びます。選んだファイルの指定行へ、A列＝本体価格、B列＝オプション番号、C列＝オプション価格 のみ書き込みます。違う仕様は行を変えて書き込みます（例: 2〜11行目）。</p>
+        <p class="hint">読み込み用（仕様書一覧）とは別の、既存のExcelをPCから選びます。選んだファイルの指定行へ、A列＝機種、B列＝図番、C列＝向け先、D列＝作番（空なら書きません）、E列＝本体価格、G列＝オプション番号、H列＝オプション価格 を入れます。違う仕様は行を変えて書き込みます（例: 2〜11行目）。</p>
         <div class="export-fields">
           <label class="field">
             書き込み先のExcel（別ファイル）
             <button id="chooseExportExcel" type="button">PCのExcelを選ぶ</button>
           </label>
           <label class="field">
-            書き込む行（A〜C列）
+            書き込む行（E・G・H列）
             <input id="exportRow" type="number" min="1" max="1000" value="2" inputmode="numeric">
           </label>
         </div>
@@ -717,6 +743,7 @@
     <p id="doneDialogMessage"></p>
     <button id="doneDialogOk" class="primary" type="button">OK</button>
   </div>
+  <script src="xls-writer.js"></script>
   <script src="excel-builder.js"></script>
   <script src="app.js"></script>
 </body>

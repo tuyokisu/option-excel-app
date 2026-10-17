@@ -6,6 +6,10 @@
   var tbody = document.getElementById("optionRows");
   var optionTableWrap = document.getElementById("optionTableWrap");
   var specNameInput = document.getElementById("specName");
+  var modelNameInput = document.getElementById("modelName");
+  var drawingNoInput = document.getElementById("drawingNo");
+  var destinationInput = document.getElementById("destination");
+  var workNoInput = document.getElementById("workNo");
   var basePriceInput = document.getElementById("basePrice");
   var inputRowsSelect = document.getElementById("inputRows");
   var errorBox = document.getElementById("errors");
@@ -378,6 +382,10 @@
   function currentPayload() {
     return {
       specName: specNameInput.value,
+      modelName: modelNameInput ? modelNameInput.value : "",
+      drawingNo: drawingNoInput ? drawingNoInput.value : "",
+      destination: destinationInput ? destinationInput.value : "",
+      workNo: workNoInput ? workNoInput.value : "",
       basePrice: basePriceInput.value,
       inputRows: Number(inputRowsSelect.value),
       options: rows.map(function (row) {
@@ -582,8 +590,8 @@
     if (!handle) {
       return false;
     }
-    if (!/\.xlsx$/i.test(handle.name || "")) {
-      showErrors(["書き込み先は .xlsx を選んでください。"]);
+    if (!/\.xlsx$/i.test(handle.name || "") && !/\.xls$/i.test(handle.name || "")) {
+      showErrors(["書き込み先は .xlsx か .xls を選んでください。"]);
       return false;
     }
     var ok = await ensureSaveDirPermission(handle, "readwrite");
@@ -610,6 +618,7 @@
             description: "Excel",
             accept: {
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+              "application/vnd.ms-excel": [".xls"],
             },
           },
         ],
@@ -922,6 +931,10 @@
 
     return {
       specName: specNameInput.value.trim(),
+      modelName: modelNameInput ? modelNameInput.value.trim() : "",
+      drawingNo: drawingNoInput ? drawingNoInput.value.trim() : "",
+      destination: destinationInput ? destinationInput.value.trim() : "",
+      workNo: workNoInput ? workNoInput.value.trim() : "",
       basePrice: baseStored,
       inputRows: Number(inputRowsSelect.value),
       selectedNos: selectedNosInput.value.trim(),
@@ -1035,6 +1048,18 @@
     }
 
     specNameInput.value = data.specName == null ? "" : String(data.specName);
+    if (modelNameInput) {
+      modelNameInput.value = data.modelName == null ? "" : String(data.modelName);
+    }
+    if (drawingNoInput) {
+      drawingNoInput.value = data.drawingNo == null ? "" : String(data.drawingNo);
+    }
+    if (destinationInput) {
+      destinationInput.value = data.destination == null ? "" : String(data.destination);
+    }
+    if (workNoInput) {
+      workNoInput.value = data.workNo == null ? "" : String(data.workNo);
+    }
     basePriceInput.value = data.basePrice == null ? "" : String(data.basePrice);
     selectedNosInput.value = data.selectedNos == null ? "" : String(data.selectedNos);
     inputRowsSelect.value = String(inputRows);
@@ -1064,6 +1089,37 @@
       .replace(/\.(xlsx|xlsm)$/i, "")
       .replace(/_オプション$/, "")
       .trim();
+  }
+
+  async function writeExportBytes(bytes) {
+    var data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    var original = exportFileHandle.name;
+    var nextName =
+      api && typeof api.safeExportFilename === "function"
+        ? api.safeExportFilename(original, data)
+        : original;
+    var handle = exportFileHandle;
+    if (nextName !== original) {
+      if (typeof exportFileHandle.getParent !== "function") {
+        throw new Error(
+          "「" +
+            original +
+            "」は拡張子が .xls のままでは、新しいExcel形式を保存できません。Excelで .xlsx として保存してから書き込んでください。"
+        );
+      }
+      var parent = await exportFileHandle.getParent();
+      if (!(await ensureSaveDirPermission(parent, "readwrite"))) {
+        throw new Error("同じフォルダへ .xlsx を保存できませんでした。もう一度フォルダの許可を出してください。");
+      }
+      handle = await parent.getFileHandle(nextName, { create: true });
+      exportFileHandle = handle;
+      await storeHandle(EXPORT_FILE_KEY, handle);
+      updateExportTargetStatus();
+    }
+    var writable = await handle.createWritable();
+    await writable.write(data);
+    await writable.close();
+    return { name: handle.name, original: original, renamed: nextName !== original };
   }
 
   async function writeSelectedCalcRow() {
@@ -1097,12 +1153,24 @@
         a: lastPreview.basePrice,
         b: lastPreview.selectedNosText,
         c: lastPreview.optionTotal,
+        modelName: modelNameInput ? modelNameInput.value.trim() : "",
+        drawingNo: drawingNoInput ? drawingNoInput.value.trim() : "",
+        destination: destinationInput ? destinationInput.value.trim() : "",
+        workNo: workNoInput ? workNoInput.value.trim() : "",
       });
-      var writable = await exportFileHandle.createWritable();
-      await writable.write(next);
-      await writable.close();
-      setStatus(name + " の " + row + " 行目（A〜C）に書き込みました。");
-      showDonePopup("Excelへ書き込みました。\n" + name + " の " + row + " 行目");
+      var saved = await writeExportBytes(next);
+      setStatus(saved.name + " の " + row + " 行目（E・G・H）に書き込みました。");
+      showDonePopup(
+        saved.renamed
+          ? "Excelへ書き込みました。\n" +
+              saved.original +
+              " は形式が合わないため、" +
+              saved.name +
+              " に保存しました。\n" +
+              row +
+              " 行目"
+          : "Excelへ書き込みました。\n" + saved.name + " の " + row + " 行目"
+      );
     } catch (error) {
       showErrors([error && error.message ? error.message : "Excelへ書き込めませんでした。"]);
     }

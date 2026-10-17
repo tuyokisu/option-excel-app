@@ -11,6 +11,8 @@ const {
   previewOptionSelection,
   readXlsxOptions,
   writeCalcRowToXlsx,
+  safeExportFilename,
+  forceFullCalcOnLoad,
 } = require("../excel-builder");
 
 const appDir = path.join(__dirname, "..");
@@ -296,6 +298,7 @@ test("writes calculation values into a chosen Excel row", async () => {
     options: sampleOptions,
   });
   const source = await built.xlsx.writeBuffer();
+  const before = unzipStore(source);
   const next = await writeCalcRowToXlsx(source, 4, {
     a: 2500000,
     b: "70,73",
@@ -303,11 +306,235 @@ test("writes calculation values into a chosen Excel row", async () => {
   });
   const files = unzipStore(next);
   const input = files["xl/worksheets/sheet2.xml"];
-  assert.equal(input.includes('r="A4"'), true);
   assert.equal(input.includes("<v>2500000</v>"), true);
   assert.equal(input.includes("70,73"), true);
   assert.equal(input.includes("<v>130000</v>"), true);
-  assert.equal(input.includes("コメ"), false);
+  assert.equal(input.includes('r="E4"'), true);
+  assert.equal(input.includes('r="G4"'), true);
+  assert.equal(input.includes('r="H4"'), true);
+  assert.equal(input.includes("品目リスト"), true);
+  assert.equal(input.includes("<f>" + nameJoin(8) + "</f>"), true);
+  assert.equal(files["xl/styles.xml"], before["xl/styles.xml"]);
+  assert.equal(files["xl/worksheets/sheet1.xml"], before["xl/worksheets/sheet1.xml"]);
+
+  const withMeta = await writeCalcRowToXlsx(source, 4, {
+    a: 2500000,
+    b: "70,73",
+    c: 130000,
+    modelName: "MX-1",
+    drawingNo: "Z-10",
+    destination: "国内",
+    workNo: "W-9",
+  });
+  const metaInput = unzipStore(withMeta)["xl/worksheets/sheet2.xml"];
+  assert.equal(metaInput.includes("MX-1"), true);
+  assert.equal(metaInput.includes("Z-10"), true);
+  assert.equal(metaInput.includes("国内"), true);
+  assert.equal(metaInput.includes("W-9"), true);
+  assert.equal(metaInput.includes('r="A4"'), true);
+  assert.equal(metaInput.includes('r="D4"'), true);
+});
+
+test("overwriting a row next to an empty bordered cell keeps one cell per address", async () => {
+  const built = buildOptionWorkbook({
+    specName: "標準仕様A",
+    basePrice: 100,
+    inputRows: 100,
+    options: sampleOptions,
+  });
+  const source = await built.xlsx.writeBuffer();
+  assert.match(unzipStore(source)["xl/worksheets/sheet2.xml"], /<c r="B3" s="\d+"\/><c r="C3"/);
+
+  const once = await writeCalcRowToXlsx(source, 3, {
+    a: 80000,
+    b: "1,3",
+    c: 9587,
+    destination: "国内",
+  });
+  const twice = await writeCalcRowToXlsx(once, 3, {
+    a: 80000,
+    b: "1,3,5",
+    c: 12000,
+    destination: "海外",
+  });
+  const sheet = unzipStore(twice)["xl/worksheets/sheet2.xml"];
+  const row3 = /<row r="3"[^>]*>([\s\S]*?)<\/row>/.exec(sheet)[1];
+  const refs = [...row3.matchAll(/<c r="([A-Z]+)3"/g)].map((m) => m[1]);
+  assert.deepEqual(refs, ["A", "B", "C", "E", "G", "H"]);
+  assert.equal(row3.includes("海外"), true);
+  assert.equal(row3.includes("国内"), false);
+  assert.equal(row3.includes("1,3,5"), true);
+  assert.equal((sheet.match(/<row r="3"/g) || []).length, 1);
+});
+
+test("forces Excel to recalculate formulas when the file opens", () => {
+  const added = forceFullCalcOnLoad(
+    '<workbook xmlns="m"><sheets><sheet name="a"/></sheets><definedNames/><extLst/></workbook>'
+  );
+  assert.equal(
+    added,
+    '<workbook xmlns="m"><sheets><sheet name="a"/></sheets><definedNames/><calcPr fullCalcOnLoad="1"/><extLst/></workbook>'
+  );
+  const updated = forceFullCalcOnLoad(
+    '<workbook><sheets/><calcPr calcId="191029" fullCalcOnLoad="0"/></workbook>'
+  );
+  assert.equal(updated, '<workbook><sheets/><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>');
+  const prefixed = forceFullCalcOnLoad("<x:workbook><x:sheets/></x:workbook>");
+  assert.equal(prefixed, '<x:workbook><x:sheets/><x:calcPr fullCalcOnLoad="1"/></x:workbook>');
+});
+
+test("written workbook recalculates on open", async () => {
+  const built = buildOptionWorkbook({
+    specName: "標準仕様A",
+    basePrice: 100,
+    inputRows: 100,
+    options: sampleOptions,
+  });
+  const source = await built.xlsx.writeBuffer();
+  const next = await writeCalcRowToXlsx(source, 4, { a: 80000, b: "1,3", c: 9587 });
+  const workbook = unzipStore(next)["xl/workbook.xml"];
+  assert.equal((workbook.match(/<calcPr\b/g) || []).length, 1);
+  assert.equal(workbook.includes('fullCalcOnLoad="1"'), true);
+});
+
+test("does not keep zip bytes under an .xls name", async () => {
+  const built = buildOptionWorkbook({
+    specName: "標準仕様A",
+    basePrice: 100,
+    inputRows: 100,
+    options: sampleOptions,
+  });
+  const zip = await built.xlsx.writeBuffer();
+  assert.equal(safeExportFilename("sample.xls", zip), "sample.xlsx");
+  assert.equal(safeExportFilename("sample.xlsx", zip), "sample.xlsx");
+});
+
+function readXlsCells(bytes) {
+  const xls = require("../xls-writer");
+  const stream = xls.findWorkbookEntry(xls.readCfb(bytes)).data;
+  const records = xls.parseRecords(stream, 0, stream.length);
+  const sstAt = records.findIndex((record) => record.type === xls.RT.SST);
+  let end = sstAt + 1;
+  while (records[end].type === xls.RT.CONTINUE) {
+    end += 1;
+  }
+  const sst = xls.readSst(records.slice(sstAt, end));
+  const sheetPos = records
+    .filter((record) => record.type === xls.RT.BOUNDSHEET)
+    .map((record) => xls.u32(record.data, 0))[0];
+  const cells = {};
+  let labelCount = 0;
+  let depth = 0;
+  for (const record of records) {
+    if (record.pos < sheetPos) {
+      continue;
+    }
+    if (record.type === xls.RT.BOF) {
+      depth += 1;
+    } else if (record.type === xls.RT.EOF) {
+      depth -= 1;
+      if (depth === 0) {
+        break;
+      }
+    }
+    const rw = xls.u16(record.data, 0) + 1;
+    const col = String.fromCharCode(65 + xls.u16(record.data, 2));
+    if (record.type === 0x0203) {
+      cells[col + rw] = new DataView(record.data.buffer, record.data.byteOffset + 6, 8).getFloat64(0, true);
+    } else if (record.type === 0x00fd) {
+      cells[col + rw] = sst.strings[xls.u32(record.data, 6)].text;
+    }
+  }
+  for (const record of records) {
+    if (record.type === 0x00fd) {
+      labelCount += 1;
+    }
+  }
+  return { cells, sst, labelCount };
+}
+
+const sampleXlsPath = path.join(__dirname, "fixtures", "sample.xls");
+
+test("rebuilding the Excel-made .xls without changes keeps every byte", () => {
+  const xls = require("../xls-writer");
+  const source = fs.readFileSync(sampleXlsPath);
+  const cfb = xls.readCfb(source);
+  const stream = xls.findWorkbookEntry(cfb).data;
+  const same = xls.rewriteWorkbookStream(stream, 4, [], { keepRecalcId: true });
+  assert.equal(Buffer.compare(Buffer.from(same), Buffer.from(stream)), 0);
+  const again = xls.readCfb(xls.writeCfb(cfb));
+  cfb.entries.forEach((entry, index) => {
+    assert.equal(again.entries[index].name, entry.name);
+    if (entry.type === 2) {
+      assert.equal(Buffer.compare(Buffer.from(again.entries[index].data), Buffer.from(entry.data)), 0);
+    }
+  });
+});
+
+test("writes calculation values into a binary .xls row", async () => {
+  const source = fs.readFileSync(sampleXlsPath);
+  const before = readXlsCells(source);
+  const written = await writeCalcRowToXlsx(source, 4, {
+    a: "1,000,000",
+    b: "1,2,3",
+    c: 50000,
+    modelName: "上書き機種",
+  });
+  assert.equal(written[0], 0xd0);
+  assert.equal(safeExportFilename("sample.xls", written), "sample.xls");
+  const after = readXlsCells(written);
+  assert.equal(after.cells.A4, "上書き機種");
+  assert.equal(after.cells.B4, before.cells.B4);
+  assert.equal(after.cells.E4, 1000000);
+  assert.equal(after.cells.G4, "1,2,3");
+  assert.equal(after.cells.H4, 50000);
+  assert.equal(after.cells.A40, before.cells.A40);
+  assert.equal(after.sst.total, after.labelCount);
+});
+
+test("writes a new .xls row twice and keeps long text intact", async () => {
+  const source = fs.readFileSync(sampleXlsPath);
+  const long = "長".repeat(300) + "ABC";
+  let written = await writeCalcRowToXlsx(source, 6, { a: 10, b: "x", c: 20 });
+  written = await writeCalcRowToXlsx(written, 6, { a: 30, b: long, c: 40, workNo: "W6" });
+  const after = readXlsCells(written);
+  assert.equal(after.cells.D6, "W6");
+  assert.equal(after.cells.E6, 30);
+  assert.equal(after.cells.G6, long);
+  assert.equal(after.cells.H6, 40);
+  assert.equal(after.sst.total, after.labelCount);
+});
+
+test("rejects .xls files that are not Excel 97-2003 workbooks", async () => {
+  const ole = Uint8Array.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  await assert.rejects(() => writeCalcRowToXlsx(ole, 2, { a: 1, b: "2", c: 3 }));
+});
+
+test("writes into XML Spreadsheet .xls without dropping other cells", async () => {
+  const xml =
+    '<?xml version="1.0"?>' +
+    '<?mso-application progid="Excel.Sheet"?>' +
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+    '<Worksheet ss:Name="Sheet1"><Table>' +
+    '<Row ss:Index="1"/>' +
+    "<Row>" +
+    '<Cell ss:StyleID="s21"><Data ss:Type="Number">1</Data></Cell>' +
+    '<Cell ss:Index="4"><Data ss:Type="String">keep</Data></Cell>' +
+    '<Cell ss:Index="6"><Data ss:Type="String">skip</Data></Cell>' +
+    "</Row></Table></Worksheet></Workbook>";
+  const next = await writeCalcRowToXlsx(new TextEncoder().encode(xml), 2, {
+    a: 2500000,
+    b: "70,73",
+    c: 130000,
+  });
+  const text = new TextDecoder().decode(next);
+  assert.equal(text.includes("2500000"), true);
+  assert.equal(text.includes("70,73"), true);
+  assert.equal(text.includes("130000"), true);
+  assert.equal(text.includes("keep"), true);
+  assert.equal(text.includes("skip"), true);
+  assert.equal(text.includes('ss:StyleID="s21"'), true);
+  assert.equal((text.match(/<Row\b/g) || []).length, 2);
 });
 
 test("keeps non-sequential Excel option numbers", async () => {
@@ -349,11 +576,17 @@ test("the page is a classic offline script", () => {
   const html = fs.readFileSync(path.join(appDir, "index.html"), "utf8");
   assert.equal(/https?:\/\//.test(html), false);
   assert.equal(html.includes("exceljs"), false);
+  const xlsWriter = html.indexOf("xls-writer.js");
   const builder = html.indexOf("excel-builder.js");
   const app = html.indexOf("app.js");
+  assert.equal(xlsWriter !== -1 && xlsWriter < builder, true);
   assert.equal(builder !== -1 && builder < app, true);
   assert.equal(html.includes('type="module"'), false);
   assert.equal(html.includes('id="basePrice"'), true);
+  assert.equal(html.includes('id="modelName"'), true);
+  assert.equal(html.includes('id="drawingNo"'), true);
+  assert.equal(html.includes('id="destination"'), true);
+  assert.equal(html.includes('id="workNo"'), true);
   assert.equal(html.includes("saveデータ"), true);
   assert.equal(html.includes('id="saveJson"'), true);
   assert.equal(html.includes('id="savedFileSearch"'), true);
