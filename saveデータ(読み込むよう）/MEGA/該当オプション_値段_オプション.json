@@ -1,0 +1,42 @@
+{
+  "specName": "該当オプション_値段",
+  "modelName": "MEga",
+  "drawingNo": "a",
+  "destination": "a",
+  "workNo": "a",
+  "basePrice": 2500,
+  "inputRows": 300,
+  "selectedNos": "1,3,5",
+  "options": [
+    {
+      "no": "1",
+      "name": "サンルーフ",
+      "price": 50000
+    },
+    {
+      "no": "2",
+      "name": "ナビ",
+      "price": 80000
+    },
+    {
+      "no": "3",
+      "name": "エアロ",
+      "price": 120000
+    },
+    {
+      "no": "4",
+      "name": "アルミホイール",
+      "price": 90000
+    },
+    {
+      "no": "5",
+      "name": "バックカメラ",
+      "price": 35000
+    },
+    {
+      "no": "9",
+      "name": "フロアマット",
+      "price": 90000
+    }
+  ]
+}

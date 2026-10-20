@@ -333,6 +333,10 @@
       overflow-y: auto;
     }
 
+    #savedFileList {
+      max-height: 18rem;
+    }
+
     .file-picker-list li {
       margin: 0;
       padding: 8px 12px;
@@ -349,9 +353,32 @@
       background: var(--soft);
     }
 
-    .file-picker-list .empty {
+    .file-picker-list .empty,
+    .file-picker-list .nav {
       cursor: default;
       color: var(--muted);
+    }
+
+    .file-picker-list .nav {
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .file-picker-list .folder {
+      font-weight: 700;
+    }
+
+    .file-picker-list .folder::after {
+      content: " ›";
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    .file-picker-list .file-folder {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
     }
 
     #saveFolderStatus {
@@ -372,6 +399,11 @@
       font-weight: 700;
     }
 
+    button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
     button.primary {
       background: var(--accent);
       color: white;
@@ -385,6 +417,15 @@
       border-color: #d9d0c3;
       color: var(--muted);
       font-weight: 600;
+    }
+
+    button.danger {
+      background: #f4e4e1;
+      color: #8a2d22;
+    }
+
+    button.danger:hover {
+      background: #ead3cf;
     }
 
     #errors {
@@ -523,6 +564,54 @@
       min-width: 4.5rem;
     }
 
+    .folder-dialog {
+      position: fixed;
+      inset: 0;
+      z-index: 2100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(28, 25, 21, 0.35);
+    }
+
+    .folder-dialog.is-open {
+      display: flex;
+    }
+
+    .folder-dialog-card {
+      width: min(420px, 100%);
+      padding: 16px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .folder-dialog-card h3 {
+      margin: 0 0 6px;
+    }
+
+    .folder-dialog-card .hint {
+      margin-bottom: 10px;
+    }
+
+    .folder-dialog-card .file-picker-list {
+      margin-top: 8px;
+      max-height: 16rem;
+    }
+
+    .folder-dialog-card .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 12px;
+    }
+
+    .folder-dialog-card .dialog-actions button {
+      width: auto;
+      min-width: 6rem;
+    }
+
     @media (max-width: 720px) {
       .fields,
       .meta-fields { grid-template-columns: 1fr; }
@@ -543,8 +632,8 @@
     <section class="card">
       <div class="fields">
         <label class="field">
-          仕様名
-          <input id="specName" type="text" autocomplete="off" placeholder="例: 標準仕様A">
+          図番番号
+          <input id="specName" type="text" autocomplete="off" placeholder="例: DW-1001">
         </label>
         <label class="field">
           本体価格
@@ -578,7 +667,7 @@
           <input id="workNo" type="text" autocomplete="off" placeholder="未入力可">
         </label>
       </div>
-      <p class="hint">本体価格はExcelの総合計に含まれます。入力行数は、カンマ区切りの番号から作る品目リストの最大件数です。機種・図番・向け先・作番は空のままでも保存・書き込みできます。</p>
+      <p class="hint">図番番号は保存ファイル名とExcel名に使います。JSONは saveする のあと、saveデータ(読み込むよう） のフォルダを選んで保存します。機種を入れると、書き込むエクセル の中にそのフォルダを作ります。本体価格はExcelの総合計に含まれます。入力行数は、カンマ区切りの番号から作る品目リストの最大件数です。機種・図番・向け先・作番は空のままでも保存・書き込みできます。</p>
     </section>
 
     <section class="card">
@@ -617,27 +706,29 @@
       <p id="status" hidden></p>
       <div class="io-grid">
         <div class="io-panel">
-          <h3>saveデータ（JSON）</h3>
-          <p class="hint">途中の入力を保存・再開します。</p>
+          <h3>saveデータ(読み込むよう）（JSON）</h3>
+          <p class="hint">まずフォルダを選び、その中のJSONをクリックします。saveするはフォルダを選んで保存します。上書き保存は、読み込んだJSONか直前にsaveしたファイルを上書きします。</p>
           <div id="savedFilePicker" class="file-picker" hidden>
             <button id="savedFileToggle" class="file-picker-toggle" type="button" aria-expanded="false" aria-haspopup="listbox">保存済みを選ぶ</button>
             <div id="savedFileMenu" class="file-picker-menu">
-              <input id="savedFileSearch" class="file-picker-search" type="search" autocomplete="off" placeholder="キーワードで検索">
+              <input id="savedFileSearch" class="file-picker-search" type="search" autocomplete="off" placeholder="フォルダ名で検索">
               <ul id="savedFileList" class="file-picker-list" role="listbox" aria-label="保存済み一覧"></ul>
             </div>
           </div>
           <div class="io-actions">
             <button id="loadSavedFile" type="button" hidden>選んで読み込む</button>
+            <button id="deleteJson" type="button" class="danger" hidden>JSONを消す</button>
             <button id="saveJson" type="button">saveする</button>
+            <button id="overwriteJson" type="button" disabled>上書き保存</button>
           </div>
         </div>
         <div class="io-panel">
-          <h3>仕様書一覧（Excel）</h3>
-          <p class="hint">A列ナンバー、B列品目、C列売価。</p>
+          <h3>読み込み用excel（Excel）</h3>
+          <p class="hint">開くたびに 読み込み用excel のフォルダと Excel を読み直します。A列ナンバー、B列品目、C列売価。</p>
           <div id="excelFilePicker" class="file-picker" hidden>
             <button id="excelFileToggle" class="file-picker-toggle" type="button" aria-expanded="false" aria-haspopup="listbox">Excelを選ぶ</button>
             <div id="excelFileMenu" class="file-picker-menu">
-              <input id="excelFileSearch" class="file-picker-search" type="search" autocomplete="off" placeholder="キーワードで検索">
+              <input id="excelFileSearch" class="file-picker-search" type="search" autocomplete="off" placeholder="フォルダ名で検索">
               <ul id="excelFileList" class="file-picker-list" role="listbox" aria-label="Excel一覧"></ul>
             </div>
           </div>
@@ -651,10 +742,32 @@
 
     <section class="card">
       <div class="table-head">
+        <h2>該当するオプション</h2>
+      </div>
+      <p class="hint">先に上でオプション表を読み込んでから使います。丸付きExcelは、○ が付いた左列の番号だけを読みます。品名欄の数字は番号にしません。オプション一覧の品名・値段はそのままです。手打ちする場合はこの下の「選ぶオプションNo」に直接入れてください。</p>
+      <div class="export-fields">
+        <label class="field">
+          仕様Excel（丸付き）
+          <button id="chooseMarkExcel" type="button">PCのExcelを選ぶ</button>
+          <input id="markExcelInput" type="file" accept=".xlsx,.xls,.xlsm" hidden>
+        </label>
+      </div>
+      <div id="markExcelSelected" class="export-selected is-empty">
+        <span class="export-selected-label">選択中のファイル</span>
+        <strong id="markExcelSelectedName">未選択</strong>
+      </div>
+      <p id="markExcelStatus" class="hint">まだ選んでいません。番号の横に ○ があるExcelを選ぶか、下で番号を手入力してください。</p>
+      <div class="table-actions">
+        <button id="loadMarkExcel" type="button">丸がついた番号を読み込む</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="table-head">
         <h2>仕様書の計算</h2>
         <p id="previewSpecStatus" class="hint"></p>
       </div>
-      <p class="hint">読み込んだJSON（または今編集中の一覧）のオプションから計算します。先に仕様書を読み込むか、上の一覧を入力してください。</p>
+      <p class="hint">オプション一覧の値段で計算します。番号は手入力するか、上の丸付きExcelから読み込みます（2択）。</p>
       <label class="field">
         選ぶオプションNo（カンマ区切り）
         <input id="selectedNos" type="text" autocomplete="off" placeholder="例: 1,2,3">
@@ -700,7 +813,7 @@
       <p id="previewEmpty" class="hint">仕様書のオプション一覧がある状態で、番号を入力してください。</p>
       <div class="export-box">
         <h3>別のExcelへ書き込む</h3>
-        <p class="hint">読み込み用（仕様書一覧）とは別の、既存のExcelをPCから選びます。選んだファイルの指定行へ、A列＝機種、B列＝図番、C列＝向け先、D列＝作番（空なら書きません）、E列＝本体価格、G列＝オプション番号、H列＝オプション価格 を入れます。違う仕様は行を変えて書き込みます（例: 2〜11行目）。</p>
+        <p class="hint">読み込み用excel とは別の、既存のExcelをPCから選びます。選んだファイルの指定行へ、A列＝機種、B列＝図番、C列＝向け先、D列＝作番（空なら書きません）、E列＝本体価格、G列＝オプション番号、H列＝オプション価格 を入れます。違う仕様は行を変えて書き込みます（例: 2〜11行目）。</p>
         <div class="export-fields">
           <label class="field">
             書き込み先のExcel（別ファイル）
@@ -736,9 +849,20 @@
     </section>
 
     <aside class="note">
-      <p>フォルダごとPCにコピーし、index.html を Edge または Chrome で開いてください。初回だけこのアプリのフォルダを指定すると、saveデータ と 仕様書一覧 に保存できます。bat は不要です。</p>
+      <p>フォルダごとPCにコピーし、index.html を Edge または Chrome で開いてください。初回だけこのアプリのフォルダを指定すると、saveデータ(読み込むよう） と 読み込み用excel / 書き込むエクセル を使います。bat は不要です。</p>
     </aside>
   </main>
+  <div id="saveFolderDialog" class="folder-dialog" hidden>
+    <div class="folder-dialog-card" role="dialog" aria-modal="true" aria-labelledby="saveFolderDialogTitle">
+      <h3 id="saveFolderDialogTitle">保存先フォルダ</h3>
+      <p class="hint">saveデータ(読み込むよう） の中から、保存するフォルダをクリックしてください。</p>
+      <input id="saveFolderSearch" class="file-picker-search" type="search" autocomplete="off" placeholder="フォルダ名で検索">
+      <ul id="saveFolderChoices" class="file-picker-list" role="listbox" aria-label="保存先フォルダ"></ul>
+      <div class="dialog-actions">
+        <button id="saveFolderCancel" type="button">キャンセル</button>
+      </div>
+    </div>
+  </div>
   <div id="doneDialog" class="done-toast" hidden role="status" aria-live="polite">
     <p id="doneDialogMessage"></p>
     <button id="doneDialogOk" class="primary" type="button">OK</button>

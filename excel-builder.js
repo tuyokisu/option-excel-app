@@ -46,12 +46,20 @@
     return Number(text);
   }
 
-  function sanitizeFilename(specName) {
-    var base = trimText(specName)
+  function sanitizeFolderName(value) {
+    var base = trimText(value)
       .replace(ILLEGAL_FILENAME, "_")
       .replace(/[\u0000-\u001f]/g, "")
       .replace(/[. ]+$/g, "")
       .trim();
+    if (base === "." || base === "..") {
+      return "";
+    }
+    return base;
+  }
+
+  function sanitizeFilename(specName) {
+    var base = sanitizeFolderName(specName);
     if (!base) {
       base = "オプション";
     }
@@ -68,7 +76,7 @@
     var seen = Object.create(null);
 
     if (!specName) {
-      errors.push("仕様名を入力してください。");
+      errors.push("図番番号を入力してください。");
     }
 
     if (ALLOWED_INPUT_ROWS.indexOf(inputRows) === -1) {
@@ -495,7 +503,7 @@
       totalStyle === STYLE.totalMoney ? STYLE.totalMoneyLeft : STYLE.totalMoneyDecimalLeft;
     var rows = [
       '<row r="1">' +
-        inlineCell("A1", STYLE.label, "仕様名") +
+        inlineCell("A1", STYLE.label, "図番番号") +
         inlineCell("B1", STYLE.plain, specName) +
         "</row>",
       '<row r="2">' +
@@ -1136,13 +1144,368 @@
       if (!no && !name && !price) {
         return;
       }
-      if (no === "仕様名" || no === "本体価格" || no === "オプションNo" || no === "品目リスト") {
+      if (no === "仕様名" || no === "図番番号" || no === "本体価格" || no === "オプションNo" || no === "品目リスト") {
         return;
       }
       started = true;
       options.push({ no: normalizeImportedNo(no), name: name, price: price });
     });
     return options;
+  }
+
+  function isCircleMark(value) {
+    var text = trimText(value).replace(/\s+/g, "");
+    if (!text) {
+      return false;
+    }
+    return /^(○|●|◯|〇|◎|◉|⦿|✔|✓|☑|レ|丸)$/.test(text);
+  }
+
+  function optionNoFromText(value) {
+    var text = normalizeImportedNo(value);
+    if (/^\d+$/.test(text)) {
+      return text;
+    }
+    var mixed = /^(\d+)\s*[○●◯〇◎◉⦿✔✓☑レ丸]$/.exec(trimText(value).replace(/\s+/g, " "));
+    if (mixed) {
+      return mixed[1];
+    }
+    return "";
+  }
+
+  function gridCell(grid, rowNum, colIndex) {
+    var row = grid[rowNum] || {};
+    return row[indexToCol(colIndex)] || "";
+  }
+
+  function usedColumnIndexes(grid) {
+    var seen = Object.create(null);
+    Object.keys(grid).forEach(function (rowNum) {
+      Object.keys(grid[rowNum] || {}).forEach(function (col) {
+        if (trimText(grid[rowNum][col])) {
+          seen[colLettersToIndex(col)] = true;
+        }
+      });
+    });
+    return Object.keys(seen)
+      .map(Number)
+      .filter(function (n) {
+        return n > 0;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+  }
+
+  function isMarkHeaderText(value) {
+    return /^(番号|品名|品目|値段|売価|選択|該当|ナンバー|No)$/i.test(trimText(value));
+  }
+
+  function collectRowCells(grid, rowNum, start, limit) {
+    var cells = [];
+    var col;
+    for (col = start; col <= limit; col += 1) {
+      var value = trimText(gridCell(grid, rowNum, col));
+      if (value) {
+        cells.push({ col: col, value: value });
+      }
+    }
+    return cells;
+  }
+
+  function rowHasCircle(grid, rowNum, start, limit) {
+    var col;
+    for (col = start; col <= limit; col += 1) {
+      if (isCircleMark(gridCell(grid, rowNum, col))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function columnBlocks(grid) {
+    var cols = usedColumnIndexes(grid);
+    var blocks = [];
+    if (cols.length === 0) {
+      return blocks;
+    }
+    var start = cols[0];
+    var prev = cols[0];
+    var i;
+    for (i = 1; i < cols.length; i += 1) {
+      if (cols[i] - prev >= 2) {
+        blocks.push({ start: start, end: prev });
+        start = cols[i];
+      }
+      prev = cols[i];
+    }
+    blocks.push({ start: start, end: prev });
+    return blocks;
+  }
+
+  function headerKind(value) {
+    var text = trimText(value).replace(/\s+/g, "");
+    if (/^(番号|ナンバー|オプションNo|No)$/i.test(text)) {
+      return "no";
+    }
+    if (/^(品名|品目)$/.test(text)) {
+      return "name";
+    }
+    if (/^(値段|売価|価格)$/.test(text)) {
+      return "price";
+    }
+    if (/^(選択|該当)$/.test(text)) {
+      return "mark";
+    }
+    return "";
+  }
+
+  function isNumericCell(value) {
+    return optionNoFromText(value) !== "" && /^[\d,.\s]+$/.test(trimText(value));
+  }
+
+  function nameFromCell(value) {
+    var text = trimText(value);
+    if (!text || isCircleMark(text) || headerKind(text) || isMarkHeaderText(text)) {
+      return "";
+    }
+    if (isNumericCell(text)) {
+      return "";
+    }
+    return text;
+  }
+
+  function blockColumns(grid, start, end) {
+    var noCol = start;
+    var nameCol = 0;
+    var priceCol = 0;
+    var headerRows = Object.create(null);
+    var rowNum;
+    var col;
+    for (rowNum = 1; rowNum <= 12; rowNum += 1) {
+      var found = false;
+      for (col = start; col <= end; col += 1) {
+        var kind = headerKind(gridCell(grid, rowNum, col));
+        if (!kind) {
+          continue;
+        }
+        found = true;
+        if (kind === "no") {
+          noCol = col;
+        } else if (kind === "name" && !nameCol) {
+          nameCol = col;
+        } else if (kind === "price" && !priceCol) {
+          priceCol = col;
+        }
+      }
+      if (found) {
+        headerRows[rowNum] = true;
+      }
+    }
+    if (!nameCol) {
+      for (col = noCol + 1; col <= end; col += 1) {
+        if (col !== priceCol) {
+          nameCol = col;
+          break;
+        }
+      }
+    }
+    if (!priceCol) {
+      for (col = noCol + 1; col <= end; col += 1) {
+        if (col === nameCol) {
+          continue;
+        }
+        var numeric = false;
+        for (rowNum = 1; rowNum <= 40; rowNum += 1) {
+          if (headerRows[rowNum]) {
+            continue;
+          }
+          if (isNumericCell(gridCell(grid, rowNum, col)) && !isCircleMark(gridCell(grid, rowNum, col))) {
+            numeric = true;
+            break;
+          }
+        }
+        if (numeric) {
+          priceCol = col;
+          break;
+        }
+      }
+    }
+    return { noCol: noCol, nameCol: nameCol, priceCol: priceCol, headerRows: headerRows };
+  }
+
+  function optionsInColumnRange(grid, start, limit) {
+    var columns = blockColumns(grid, start, limit);
+    var rows = Object.keys(grid)
+      .map(Number)
+      .filter(function (n) {
+        return n > 0;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var options = [];
+    var nos = [];
+    var skip = Object.create(null);
+    var seen = Object.create(null);
+    rows.forEach(function (rowNum) {
+      if (skip[rowNum] || columns.headerRows[rowNum]) {
+        return;
+      }
+      var no = optionNoFromText(gridCell(grid, rowNum, columns.noCol));
+      if (!no) {
+        return;
+      }
+      var name = columns.nameCol ? nameFromCell(gridCell(grid, rowNum, columns.nameCol)) : "";
+      var price = "";
+      if (columns.priceCol && columns.priceCol !== columns.nameCol) {
+        var priceValue = parsePrice(gridCell(grid, rowNum, columns.priceCol));
+        if (Number.isFinite(priceValue)) {
+          price = String(priceValue);
+        }
+      }
+      var marked = rowHasCircle(grid, rowNum, start, limit);
+      var nextNo = optionNoFromText(gridCell(grid, rowNum + 1, columns.noCol));
+      if (!nextNo && !columns.headerRows[rowNum + 1]) {
+        skip[rowNum + 1] = true;
+        if (!name && columns.nameCol) {
+          name = nameFromCell(gridCell(grid, rowNum + 1, columns.nameCol));
+        }
+        if (!price && columns.priceCol && columns.priceCol !== columns.nameCol) {
+          var nextPrice = parsePrice(gridCell(grid, rowNum + 1, columns.priceCol));
+          if (Number.isFinite(nextPrice)) {
+            price = String(nextPrice);
+          }
+        }
+        if (rowHasCircle(grid, rowNum + 1, start, limit)) {
+          marked = true;
+        }
+      }
+      if (seen[no]) {
+        return;
+      }
+      seen[no] = true;
+      options.push({ no: no, name: name, price: price });
+      if (marked) {
+        nos.push(no);
+      }
+    });
+    return { nos: nos, options: options };
+  }
+
+  function leftOptionsFromGrid(grid) {
+    var blocks = columnBlocks(grid);
+    var options = [];
+    var nos = [];
+    var seen = Object.create(null);
+    if (blocks.length === 0) {
+      return { nos: nos, options: options };
+    }
+    blocks.forEach(function (block) {
+      var part = optionsInColumnRange(grid, block.start, block.end);
+      part.options.forEach(function (item) {
+        if (seen[item.no]) {
+          return;
+        }
+        seen[item.no] = true;
+        options.push(item);
+      });
+      part.nos.forEach(function (no) {
+        if (nos.indexOf(no) === -1) {
+          nos.push(no);
+        }
+      });
+    });
+    return { nos: nos, options: options };
+  }
+
+  function markedNosFromGrid(grid) {
+    return leftOptionsFromGrid(grid).nos;
+  }
+
+  function xmlssSheetGrid(sheetXml) {
+    var grid = Object.create(null);
+    var rowRe = elementRe("Row");
+    var lastRow = 0;
+    var rowMatch;
+    while ((rowMatch = rowRe.exec(sheetXml || ""))) {
+      var rowAttrs = rowMatch[1] || "";
+      var inner = rowMatch[3] || "";
+      var rowIdx = /\bss:Index="(\d+)"/.exec(rowAttrs);
+      lastRow = rowIdx ? Number(rowIdx[1]) : lastRow + 1;
+      var col = 0;
+      var cellRe = elementRe("Cell");
+      var cellMatch;
+      while ((cellMatch = cellRe.exec(inner))) {
+        var attrs = cellMatch[1] || "";
+        var cellInner = cellMatch[3] || "";
+        var colIdx = /\bss:Index="(\d+)"/.exec(attrs);
+        col = colIdx ? Number(colIdx[1]) : col + 1;
+        var data = /<Data\b[^>]*>([\s\S]*?)<\/Data>/.exec(cellInner);
+        if (!grid[lastRow]) {
+          grid[lastRow] = Object.create(null);
+        }
+        grid[lastRow][indexToCol(col)] = data ? decodeXml(data[1]) : "";
+      }
+    }
+    return grid;
+  }
+
+  function pickBestMarked(list) {
+    var best = { nos: [], options: [] };
+    list.forEach(function (item) {
+      if (item && item.nos && item.nos.length > best.nos.length) {
+        best = item;
+      }
+    });
+    return best;
+  }
+
+  function readMarkedOptionNos(buffer) {
+    var bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    var kind = sniffWorkbook(bytes);
+    if (kind === "xls") {
+      return Promise.reject(
+        new Error("丸付き仕様のExcelは .xlsx（またはXML形式の .xls）で選んでください。")
+      );
+    }
+    if (kind === "xmlss") {
+      try {
+        var xml = decodeText(bytes);
+        var sheets = xml.match(/<Worksheet\b[\s\S]*?<\/Worksheet>/g) || [];
+        var lists = sheets.map(function (sheet) {
+          return leftOptionsFromGrid(xmlssSheetGrid(sheet));
+        });
+        var parsed = pickBestMarked(lists);
+        if (parsed.nos.length === 0) {
+          throw new Error("番号の横に ○ が付いた行が見つかりませんでした。");
+        }
+        return Promise.resolve(parsed);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    if (kind !== "xlsx") {
+      return Promise.reject(new Error("対応しているのは .xlsx と、XML形式のExcelです。"));
+    }
+    return unzipXlsx(bytes).then(function (files) {
+      var shared = parseSharedStrings(files["xl/sharedStrings.xml"]);
+      var sheets = parseWorkbookSheets(files);
+      if (sheets.length === 0) {
+        throw new Error("Excelにシートが見つかりませんでした。");
+      }
+      var lists = sheets.map(function (sheet) {
+        if (!files[sheet.path]) {
+          return { nos: [], options: [] };
+        }
+        return leftOptionsFromGrid(parseSheetGrid(files[sheet.path], shared));
+      });
+      var parsed = pickBestMarked(lists);
+      if (parsed.nos.length === 0) {
+        throw new Error("番号の横に ○ が付いた行が見つかりませんでした。");
+      }
+      return parsed;
+    });
   }
 
   function parseWorkbookSheets(files) {
@@ -1222,7 +1585,7 @@
         var inputGrid = parseSheetGrid(files[inputSheet.path], shared);
         var row1 = inputGrid[1] || {};
         var row2 = inputGrid[2] || {};
-        if (trimText(row1.A) === "仕様名") {
+        if (trimText(row1.A) === "仕様名" || trimText(row1.A) === "図番番号") {
           specName = trimText(row1.B);
         }
         if (trimText(row2.A) === "本体価格") {
@@ -1724,12 +2087,14 @@
     ALLOWED_INPUT_ROWS: ALLOWED_INPUT_ROWS,
     buildOptionWorkbook: buildOptionWorkbook,
     sanitizeFilename: sanitizeFilename,
+    sanitizeFolderName: sanitizeFolderName,
     validateOptionInput: validateOptionInput,
     normalizePriceText: normalizePriceText,
     parsePrice: parsePrice,
     splitOptionCodes: splitOptionCodes,
     previewOptionSelection: previewOptionSelection,
     readXlsxOptions: readXlsxOptions,
+    readMarkedOptionNos: readMarkedOptionNos,
     writeCalcRowToXlsx: writeCalcRowToXlsx,
     safeExportFilename: safeExportFilename,
     forceFullCalcOnLoad: forceFullCalcOnLoad,

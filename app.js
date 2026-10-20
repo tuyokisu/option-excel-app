@@ -35,29 +35,53 @@
   var savedFileSearch = document.getElementById("savedFileSearch");
   var savedFileList = document.getElementById("savedFileList");
   var loadSavedFileButton = document.getElementById("loadSavedFile");
+  var deleteJsonButton = document.getElementById("deleteJson");
   var savedFileNames = [];
   var selectedSavedFile = "";
+  var loadedJsonPath = "";
+  var savedBrowseFolder = null;
+  var pendingSaveDocument = null;
+  var saveFolderNames = [];
+  var saveFolderDialog = document.getElementById("saveFolderDialog");
+  var saveFolderSearch = document.getElementById("saveFolderSearch");
+  var saveFolderChoices = document.getElementById("saveFolderChoices");
+  var saveFolderCancel = document.getElementById("saveFolderCancel");
+  var ROOT_FOLDER_LABEL = "（フォルダなし）";
   var excelFilePicker = document.getElementById("excelFilePicker");
   var excelFileToggle = document.getElementById("excelFileToggle");
   var excelFileSearch = document.getElementById("excelFileSearch");
   var excelFileList = document.getElementById("excelFileList");
   var loadExcelFileButton = document.getElementById("loadExcelFile");
   var excelFileNames = [];
+  var extraExcelFolders = [];
+  var extraSavedFolders = [];
   var selectedExcelFile = "";
+  var excelBrowseFolder = null;
   var exportRowInput = document.getElementById("exportRow");
   var exportTargetStatus = document.getElementById("exportTargetStatus");
   var exportSelectedFile = document.getElementById("exportSelectedFile");
   var exportSelectedName = document.getElementById("exportSelectedName");
   var writeCalcRowButton = document.getElementById("writeCalcRow");
   var chooseExportExcelButton = document.getElementById("chooseExportExcel");
+  var chooseMarkExcelButton = document.getElementById("chooseMarkExcel");
+  var loadMarkExcelButton = document.getElementById("loadMarkExcel");
+  var markExcelSelected = document.getElementById("markExcelSelected");
+  var markExcelSelectedName = document.getElementById("markExcelSelectedName");
+  var markExcelStatus = document.getElementById("markExcelStatus");
+  var markExcelFile = null;
+  var markExcelInput = document.getElementById("markExcelInput");
   var exportFileHandle = null;
   var SAVE_DIR_DB = "option-excel-app";
   var SAVE_DIR_STORE = "handles";
   var APP_DIR_KEY = "app-root";
   var EXPORT_FILE_KEY = "export-xlsx";
+  var SAVE_FOLDER_NAME = "saveデータ(読み込むよう）";
+  var EXCEL_LOAD_FOLDER_NAME = "読み込み用excel";
+  var EXCEL_WRITE_FOLDER_NAME = "書き込むエクセル";
   var appDirHandle = null;
   var saveDirHandle = null;
   var excelDirHandle = null;
+  var excelWriteDirHandle = null;
   var saveApi = false;
   var saveApiBase = "";
   var lastPreview = null;
@@ -240,7 +264,7 @@
       selectedNos: selectedNosInput.value,
       options: rows,
     });
-    var specLabel = specNameInput.value.trim() || "（仕様名なし）";
+    var specLabel = specNameInput.value.trim() || "（図番番号なし）";
     previewSpecStatus.textContent =
       specLabel + " のオプション一覧 " + preview.masterCount + "件で計算";
     lastPreview = preview;
@@ -420,6 +444,111 @@
     return excelName.replace(/\.xlsx$/i, ".json");
   }
 
+  function modelFolderName() {
+    if (!api || typeof api.sanitizeFolderName !== "function") {
+      return String(modelNameInput && modelNameInput.value ? modelNameInput.value : "").trim();
+    }
+    return api.sanitizeFolderName(modelNameInput ? modelNameInput.value : "");
+  }
+
+  function jsonRelativePath(folder) {
+    var name = jsonFilename();
+    var dir = folder == null ? modelFolderName() : String(folder);
+    return dir ? dir + "/" + name : name;
+  }
+
+  function excelRelativePath(filename) {
+    var folder = modelFolderName();
+    return folder ? folder + "/" + filename : filename;
+  }
+
+  function folderFromSavedPath(rel) {
+    var text = String(rel || "");
+    var at = text.lastIndexOf("/");
+    return at === -1 ? "" : text.slice(0, at);
+  }
+
+  async function nestedFileHandle(root, rel, create, createDirs) {
+    var parts = String(rel || "").split("/").filter(Boolean);
+    if (parts.length === 0) {
+      throw new Error("ファイル名が正しくありません。");
+    }
+    var makeFile = Boolean(create);
+    var makeDir = createDirs == null ? makeFile : Boolean(createDirs);
+    var dir = root;
+    var i;
+    for (i = 0; i < parts.length - 1; i += 1) {
+      dir = await dir.getDirectoryHandle(parts[i], { create: makeDir });
+    }
+    return {
+      dir: dir,
+      name: parts[parts.length - 1],
+      handle: await dir.getFileHandle(parts[parts.length - 1], { create: makeFile }),
+    };
+  }
+
+  function isDirEntry(entry) {
+    return entry && (entry.kind === "directory" || typeof entry.getFile !== "function");
+  }
+
+  function isFileEntry(entry) {
+    return entry && (entry.kind === "file" || typeof entry.getFile === "function");
+  }
+
+  async function forEachDirEntry(handle, visit) {
+    if (!handle) {
+      return;
+    }
+    try {
+      if (typeof handle.entries === "function") {
+        for await (var pair of handle.entries()) {
+          await visit(pair[1], pair[0]);
+        }
+        return;
+      }
+      if (typeof handle.values === "function") {
+        for await (var entry of handle.values()) {
+          await visit(entry, entry.name);
+        }
+      }
+    } catch (error) {
+      // 一部のフォルダは列挙できない
+    }
+  }
+
+  function isListedExcelName(name) {
+    return /\.(xlsx|xlsm|xls)$/i.test(name || "") && !/^~\$/.test(name || "");
+  }
+
+  async function listFilesRecursive(handle, prefix, matchName, depth) {
+    var names = [];
+    var level = depth || 0;
+    await forEachDirEntry(handle, async function (entry, name) {
+      if (isDirEntry(entry) && level < 2) {
+        var nested = await listFilesRecursive(entry, prefix + name + "/", matchName, level + 1);
+        names = names.concat(nested);
+        return;
+      }
+      if (isFileEntry(entry) && matchName(name)) {
+        names.push(prefix + name);
+      }
+    });
+    names.sort(function (a, b) {
+      return a.localeCompare(b, "ja");
+    });
+    return names;
+  }
+
+  async function listJsonFilesRecursive(handle, prefix) {
+    return listFilesRecursive(handle, prefix || "", function (name) {
+      return /\.json$/i.test(name);
+    }, 0);
+  }
+
+  async function listExcelFilesRecursive(handle, prefix) {
+    return listFilesRecursive(handle, prefix || "", isListedExcelName, 0);
+  }
+
   function supportsSaveFolder() {
     return typeof window.showDirectoryPicker === "function" && typeof indexedDB !== "undefined";
   }
@@ -469,22 +598,119 @@
     });
   }
 
+  function askPermission(handle, mode) {
+    if (!handle || typeof handle.requestPermission !== "function") {
+      return Promise.resolve(false);
+    }
+    return handle
+      .requestPermission({ mode: mode || "readwrite" })
+      .then(function (state) {
+        return state === "granted";
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  function fsAccessMessage(error, fallback) {
+    if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
+      return "ブラウザがファイルの読み取りを拒否しました。ページを再読み込みし、「このアプリのフォルダを指定」でもう一度許可してから読み込んでください。";
+    }
+    return (error && error.message) || fallback;
+  }
+
+  async function readHandleFile(handle) {
+    try {
+      return await handle.getFile();
+    } catch (error) {
+      var blocked = error && (error.name === "NotAllowedError" || error.name === "SecurityError");
+      if (!blocked) {
+        throw error;
+      }
+      if ((await askPermission(handle, "read")) || (await askPermission(handle, "readwrite"))) {
+        return handle.getFile();
+      }
+      throw error;
+    }
+  }
+
   async function ensureSaveDirPermission(handle, mode) {
     if (!handle || typeof handle.queryPermission !== "function") {
       return false;
     }
-    var opts = { mode: mode || "readwrite" };
-    if ((await handle.queryPermission(opts)) === "granted") {
-      return true;
+    var modes = mode === "read" ? ["readwrite", "read"] : [mode || "readwrite"];
+    var i;
+    for (i = 0; i < modes.length; i += 1) {
+      try {
+        if ((await handle.queryPermission({ mode: modes[i] })) === "granted") {
+          return true;
+        }
+      } catch (error) {
+        // 次の許可状態を見る
+      }
     }
-    if (typeof handle.requestPermission !== "function") {
-      return false;
-    }
-    return (await handle.requestPermission(opts)) === "granted";
+    return askPermission(handle, modes[0]);
   }
 
-  function fillFileSelect(files) {
+  function uniqueFolders(paths, extraFolders) {
+    var folders = [];
+    var hasRoot = false;
+    function addFolder(folder) {
+      if (!folder || folders.indexOf(folder) !== -1) {
+        return;
+      }
+      folders.push(folder);
+    }
+    (paths || []).forEach(function (name) {
+      var slash = String(name).indexOf("/");
+      if (slash === -1) {
+        hasRoot = true;
+        return;
+      }
+      addFolder(name.slice(0, slash));
+    });
+    (extraFolders || []).forEach(addFolder);
+    folders.sort(function (a, b) {
+      return a.localeCompare(b, "ja");
+    });
+    return { folders: folders, hasRoot: hasRoot };
+  }
+
+  async function listDirectoryNames(handle) {
+    var names = [];
+    await forEachDirEntry(handle, async function (entry, name) {
+      if (isDirEntry(entry) && name) {
+        names.push(name);
+      }
+    });
+    names.sort(function (a, b) {
+      return a.localeCompare(b, "ja");
+    });
+    return names;
+  }
+
+  function filesInFolder(paths, folder) {
+    if (folder === "") {
+      return (paths || []).filter(function (name) {
+        return String(name).indexOf("/") === -1;
+      });
+    }
+    var prefix = folder + "/";
+    return (paths || []).filter(function (name) {
+      return String(name).indexOf(prefix) === 0;
+    });
+  }
+
+  function applyBrowseFolder(folder) {
+    savedBrowseFolder = folder;
+    if (folder && modelNameInput) {
+      modelNameInput.value = folder;
+    }
+  }
+
+  function fillFileSelect(files, folders) {
     savedFileNames = Array.isArray(files) ? files.slice() : [];
+    extraSavedFolders = Array.isArray(folders) ? folders.slice() : [];
     if (selectedSavedFile && savedFileNames.indexOf(selectedSavedFile) === -1) {
       selectedSavedFile = "";
     }
@@ -492,7 +718,16 @@
   }
 
   function savedFileToggleLabel() {
-    return selectedSavedFile || "保存済みを選ぶ";
+    if (selectedSavedFile) {
+      return selectedSavedFile;
+    }
+    if (savedBrowseFolder) {
+      return savedBrowseFolder + " のフォルダ";
+    }
+    if (savedBrowseFolder === "") {
+      return ROOT_FOLDER_LABEL;
+    }
+    return "保存済みを選ぶ";
   }
 
   function closeSavedFileMenu() {
@@ -501,40 +736,104 @@
   }
 
   function openSavedFileMenu() {
+    savedBrowseFolder = null;
+    savedFileSearch.value = "";
     savedFilePicker.classList.add("is-open");
     savedFileToggle.setAttribute("aria-expanded", "true");
-    renderSavedFileList();
-    savedFileSearch.focus();
+    refreshSavedFileList()
+      .catch(function () {})
+      .then(function () {
+        if (!savedFilePicker.classList.contains("is-open")) {
+          return;
+        }
+        renderSavedFileList();
+        savedFileSearch.focus();
+      });
+  }
+
+  function addPickerEmpty(list, text) {
+    var empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = text;
+    list.appendChild(empty);
   }
 
   function renderSavedFileList() {
     savedFileToggle.textContent = savedFileToggleLabel();
     var keyword = savedFileSearch.value.trim().toLowerCase();
-    var matched = savedFileNames.filter(function (name) {
+    savedFileList.replaceChildren();
+    savedFileSearch.placeholder =
+      savedBrowseFolder === null ? "フォルダ名で検索" : "ファイル名で検索";
+
+    if (savedBrowseFolder === null) {
+      var grouped = uniqueFolders(savedFileNames, extraSavedFolders);
+      var folders = grouped.folders.filter(function (folder) {
+        return !keyword || folder.toLowerCase().indexOf(keyword) !== -1;
+      });
+      if (grouped.hasRoot && (!keyword || ROOT_FOLDER_LABEL.toLowerCase().indexOf(keyword) !== -1)) {
+        folders = folders.concat([""]);
+      }
+      if (folders.length === 0) {
+        addPickerEmpty(
+          savedFileList,
+          savedFileNames.length || extraSavedFolders.length
+            ? "キーワードに一致するフォルダはありません"
+            : "保存済みファイルはまだありません"
+        );
+        return;
+      }
+      folders.forEach(function (folder) {
+        var item = document.createElement("li");
+        item.className = "folder";
+        item.textContent = folder || ROOT_FOLDER_LABEL;
+        item.setAttribute("role", "option");
+        if (folder && folder === folderFromSavedPath(selectedSavedFile)) {
+          item.classList.add("is-selected");
+        }
+        item.addEventListener("click", function (event) {
+          event.stopPropagation();
+          savedBrowseFolder = folder;
+          savedFileSearch.value = "";
+          renderSavedFileList();
+        });
+        savedFileList.appendChild(item);
+      });
+      return;
+    }
+
+    var back = document.createElement("li");
+    back.className = "nav";
+    back.textContent = "← フォルダ一覧へ";
+    back.addEventListener("click", function (event) {
+      event.stopPropagation();
+      savedBrowseFolder = null;
+      savedFileSearch.value = "";
+      renderSavedFileList();
+    });
+    savedFileList.appendChild(back);
+
+    var files = filesInFolder(savedFileNames, savedBrowseFolder).filter(function (name) {
       if (!keyword) {
         return true;
       }
       return name.toLowerCase().indexOf(keyword) !== -1;
     });
-    savedFileList.replaceChildren();
-    if (matched.length === 0) {
-      var empty = document.createElement("li");
-      empty.className = "empty";
-      empty.textContent = savedFileNames.length
-        ? "キーワードに一致する保存はありません"
-        : "保存済みファイルはまだありません";
-      savedFileList.appendChild(empty);
+    if (files.length === 0) {
+      addPickerEmpty(savedFileList, "このフォルダに保存はありません");
       return;
     }
-    matched.forEach(function (name) {
+    files.forEach(function (name) {
       var item = document.createElement("li");
-      item.textContent = name;
+      var folder = folderFromSavedPath(name);
+      item.textContent = name.indexOf("/") === -1 ? name : name.slice(name.lastIndexOf("/") + 1);
       item.setAttribute("role", "option");
       if (name === selectedSavedFile) {
         item.className = "is-selected";
       }
-      item.addEventListener("click", function () {
+      item.addEventListener("click", function (event) {
+        event.stopPropagation();
         selectedSavedFile = name;
+        applyBrowseFolder(folder);
         savedFileSearch.value = "";
         renderSavedFileList();
         closeSavedFileMenu();
@@ -543,8 +842,9 @@
     });
   }
 
-  function fillExcelSelect(files) {
+  function fillExcelSelect(files, folders) {
     excelFileNames = Array.isArray(files) ? files.slice() : [];
+    extraExcelFolders = Array.isArray(folders) ? folders.slice() : [];
     if (selectedExcelFile && excelFileNames.indexOf(selectedExcelFile) === -1) {
       selectedExcelFile = "";
     }
@@ -552,7 +852,16 @@
   }
 
   function excelFileToggleLabel() {
-    return selectedExcelFile || "Excelを選ぶ";
+    if (selectedExcelFile) {
+      return selectedExcelFile;
+    }
+    if (excelBrowseFolder) {
+      return excelBrowseFolder + " のフォルダ";
+    }
+    if (excelBrowseFolder === "") {
+      return ROOT_FOLDER_LABEL;
+    }
+    return "Excelを選ぶ";
   }
 
   function closeExcelFileMenu() {
@@ -561,10 +870,19 @@
   }
 
   function openExcelFileMenu() {
+    excelBrowseFolder = null;
+    excelFileSearch.value = "";
     excelFilePicker.classList.add("is-open");
     excelFileToggle.setAttribute("aria-expanded", "true");
-    renderExcelFileList();
-    excelFileSearch.focus();
+    refreshExcelFileList()
+      .catch(function () {})
+      .then(function () {
+        if (!excelFilePicker.classList.contains("is-open")) {
+          return;
+        }
+        renderExcelFileList();
+        excelFileSearch.focus();
+      });
   }
 
   function updateExportTargetStatus() {
@@ -634,6 +952,66 @@
     }
   }
 
+  function updateMarkExcelStatus() {
+    var name = markExcelFile && markExcelFile.name ? markExcelFile.name : "";
+    if (markExcelSelectedName) {
+      markExcelSelectedName.textContent = name || "未選択";
+    }
+    if (markExcelSelected) {
+      markExcelSelected.classList.toggle("is-ready", Boolean(name));
+      markExcelSelected.classList.toggle("is-empty", !name);
+    }
+    if (chooseMarkExcelButton) {
+      chooseMarkExcelButton.textContent = name ? "選び直す" : "PCのExcelを選ぶ";
+    }
+    if (markExcelStatus) {
+      markExcelStatus.textContent = name
+        ? name + " を選択しました。"
+        : "まだ選んでいません。番号の横に ○ があるExcelを選ぶか、下で番号を手入力してください。";
+    }
+  }
+
+  function useMarkExcelFile(file) {
+    if (!file) {
+      return;
+    }
+    markExcelFile = file;
+    updateMarkExcelStatus();
+    showErrors([]);
+    setStatus("仕様Excelを選びました: " + file.name);
+    loadMarkedOptionNos();
+  }
+
+  async function loadMarkedOptionNos() {
+    showErrors([]);
+    if (!markExcelFile) {
+      showErrors(["先に、丸の付いた仕様Excelを「PCのExcelを選ぶ」から指定してください。"]);
+      return;
+    }
+    if (!api || typeof api.readMarkedOptionNos !== "function") {
+      showErrors(["丸付き番号の読み込みに必要なファイルがありません。"]);
+      return;
+    }
+    try {
+      var source = await markExcelFile.arrayBuffer();
+      var parsed = await api.readMarkedOptionNos(source);
+      var nos = Array.isArray(parsed) ? parsed : parsed.nos || [];
+      if (rows.filter(isFilled).length === 0) {
+        showErrors(["先にオプション一覧（オプション表）を読み込むか入力してください。丸付きExcelは番号だけ使います。"]);
+        return;
+      }
+      selectedNosInput.value = nos.join(",");
+      if (markExcelStatus) {
+        markExcelStatus.textContent =
+          nos.length + "件の番号を読みました: " + nos.join(", ") + "。下の「選ぶオプションNo」に入れています。";
+      }
+      setStatus("丸付き番号を読み込みました: " + nos.join(", "));
+      updatePreview();
+    } catch (error) {
+      showErrors([error && error.message ? error.message : "丸付き番号を読み込めませんでした。"]);
+    }
+  }
+
   async function restoreExportExcelFile() {
     try {
       var stored = await readStoredHandle(EXPORT_FILE_KEY);
@@ -649,31 +1027,75 @@
   function renderExcelFileList() {
     excelFileToggle.textContent = excelFileToggleLabel();
     var keyword = excelFileSearch.value.trim().toLowerCase();
-    var matched = excelFileNames.filter(function (name) {
+    excelFileList.replaceChildren();
+    excelFileSearch.placeholder =
+      excelBrowseFolder === null ? "フォルダ名で検索" : "ファイル名で検索";
+
+    if (excelBrowseFolder === null) {
+      var grouped = uniqueFolders(excelFileNames, extraExcelFolders);
+      var folders = grouped.folders.filter(function (folder) {
+        return !keyword || folder.toLowerCase().indexOf(keyword) !== -1;
+      });
+      if (grouped.hasRoot && (!keyword || ROOT_FOLDER_LABEL.toLowerCase().indexOf(keyword) !== -1)) {
+        folders = folders.concat([""]);
+      }
+      if (folders.length === 0) {
+        addPickerEmpty(
+          excelFileList,
+          excelFileNames.length ? "キーワードに一致するフォルダはありません" : "Excelファイルはまだありません"
+        );
+        return;
+      }
+      folders.forEach(function (folder) {
+        var item = document.createElement("li");
+        item.className = "folder";
+        item.textContent = folder || ROOT_FOLDER_LABEL;
+        item.setAttribute("role", "option");
+        item.addEventListener("click", function (event) {
+          event.stopPropagation();
+          excelBrowseFolder = folder;
+          if (folder && modelNameInput) {
+            modelNameInput.value = folder;
+          }
+          excelFileSearch.value = "";
+          renderExcelFileList();
+        });
+        excelFileList.appendChild(item);
+      });
+      return;
+    }
+
+    var back = document.createElement("li");
+    back.className = "nav";
+    back.textContent = "← フォルダ一覧へ";
+    back.addEventListener("click", function (event) {
+      event.stopPropagation();
+      excelBrowseFolder = null;
+      excelFileSearch.value = "";
+      renderExcelFileList();
+    });
+    excelFileList.appendChild(back);
+
+    var files = filesInFolder(excelFileNames, excelBrowseFolder).filter(function (name) {
       if (!keyword) {
         return true;
       }
       return name.toLowerCase().indexOf(keyword) !== -1;
     });
-    excelFileList.replaceChildren();
-    if (matched.length === 0) {
-      var empty = document.createElement("li");
-      empty.className = "empty";
-      empty.textContent = excelFileNames.length
-        ? "キーワードに一致するExcelはありません"
-        : "Excelファイルはまだありません";
-      excelFileList.appendChild(empty);
+    if (files.length === 0) {
+      addPickerEmpty(excelFileList, "このフォルダに一致するExcelはありません");
       return;
     }
-    matched.forEach(function (name) {
+    files.forEach(function (name) {
       var item = document.createElement("li");
-      item.textContent = name;
+      item.textContent = name.indexOf("/") === -1 ? name : name.slice(name.lastIndexOf("/") + 1);
       item.setAttribute("role", "option");
       if (name === selectedExcelFile) {
         item.className = "is-selected";
       }
       item.addEventListener("click", function () {
         selectedExcelFile = name;
+        excelBrowseFolder = folderFromSavedPath(name);
         excelFileSearch.value = "";
         renderExcelFileList();
         closeExcelFileMenu();
@@ -682,14 +1104,33 @@
     });
   }
 
+  async function existingDirHandle(parent, name) {
+    try {
+      return await parent.getDirectoryHandle(name);
+    } catch (error) {
+      throw new Error(
+        "「" + name + "」フォルダが見つかりません。新しく作らず、あらかじめ用意したフォルダを使います。"
+      );
+    }
+  }
+
   function setSaveFolderUiLinked(name) {
     saveFolderStatus.textContent =
-      "保存先はアプリフォルダ内です。途中保存は saveデータ、Excelは 仕様書一覧。" +
+      "JSONは " +
+      SAVE_FOLDER_NAME +
+      "、Excelの読み込みは " +
+      EXCEL_LOAD_FOLDER_NAME +
+      "、Excelの作成は " +
+      EXCEL_WRITE_FOLDER_NAME +
+      " です。" +
       (name ? "（" + name + "）" : "");
     linkSaveFolderButton.hidden = saveApi;
     linkSaveFolderButton.textContent = "アプリフォルダを変更";
     savedFilePicker.hidden = false;
     loadSavedFileButton.hidden = false;
+    if (deleteJsonButton) {
+      deleteJsonButton.hidden = false;
+    }
     excelFilePicker.hidden = false;
     loadExcelFileButton.hidden = false;
   }
@@ -703,45 +1144,30 @@
     savedFilePicker.hidden = true;
     closeSavedFileMenu();
     loadSavedFileButton.hidden = true;
+    if (deleteJsonButton) {
+      deleteJsonButton.hidden = true;
+    }
     excelFilePicker.hidden = true;
     closeExcelFileMenu();
     loadExcelFileButton.hidden = true;
   }
 
   async function listSavedJsonFiles(handle) {
-    var names = [];
-    for await (var entry of handle.values()) {
-      if (entry.kind === "file" && /\.json$/i.test(entry.name)) {
-        names.push(entry.name);
-      }
-    }
-    names.sort(function (a, b) {
-      return a.localeCompare(b, "ja");
-    });
-    return names;
+    return listJsonFilesRecursive(handle, "");
   }
 
   async function listExcelFiles(handle) {
-    var names = [];
-    for await (var entry of handle.values()) {
-      if (entry.kind === "file" && /\.xlsx$/i.test(entry.name)) {
-        names.push(entry.name);
-      }
-    }
-    names.sort(function (a, b) {
-      return a.localeCompare(b, "ja");
-    });
-    return names;
+    return listExcelFilesRecursive(handle, "");
   }
 
   async function refreshExcelFileList() {
     if (saveApi) {
       var excelRes = await fetch(apiUrl("/api/excels"), { cache: "no-store" });
       if (!excelRes.ok) {
-        throw new Error("仕様書一覧 の取得ができませんでした。");
+        throw new Error(EXCEL_LOAD_FOLDER_NAME + " の取得ができませんでした。");
       }
       var excelData = await excelRes.json();
-      fillExcelSelect(excelData.files || []);
+      fillExcelSelect(excelData.files || [], excelData.folders || []);
       return;
     }
     if (!excelDirHandle) {
@@ -753,17 +1179,17 @@
       fillExcelSelect([]);
       return;
     }
-    fillExcelSelect(await listExcelFiles(excelDirHandle));
+    fillExcelSelect(await listExcelFiles(excelDirHandle), await listDirectoryNames(excelDirHandle));
   }
 
   async function refreshSavedFileList() {
     if (saveApi) {
       var res = await fetch(apiUrl("/api/saves"), { cache: "no-store" });
       if (!res.ok) {
-        throw new Error("saveデータ の一覧を取得できませんでした。");
+        throw new Error(SAVE_FOLDER_NAME + " の一覧を取得できませんでした。");
       }
       var data = await res.json();
-      fillFileSelect(data.files || []);
+      fillFileSelect(data.files || [], data.folders || []);
       await refreshExcelFileList();
       return;
     }
@@ -777,10 +1203,11 @@
       appDirHandle = null;
       saveDirHandle = null;
       excelDirHandle = null;
+      excelWriteDirHandle = null;
       setSaveFolderUiUnlinked("フォルダへのアクセスが切れました。もう一度、このアプリのフォルダを指定してください。");
       return;
     }
-    fillFileSelect(await listSavedJsonFiles(saveDirHandle));
+    fillFileSelect(await listSavedJsonFiles(saveDirHandle), await listDirectoryNames(saveDirHandle));
     await refreshExcelFileList();
   }
 
@@ -799,8 +1226,9 @@
       return false;
     }
     appDirHandle = handle;
-    saveDirHandle = await handle.getDirectoryHandle("saveデータ", { create: true });
-    excelDirHandle = await handle.getDirectoryHandle("仕様書一覧", { create: true });
+    saveDirHandle = await existingDirHandle(handle, SAVE_FOLDER_NAME);
+    excelDirHandle = await existingDirHandle(handle, EXCEL_LOAD_FOLDER_NAME);
+    excelWriteDirHandle = await existingDirHandle(handle, EXCEL_WRITE_FOLDER_NAME);
     await storeHandle(APP_DIR_KEY, handle);
     setSaveFolderUiLinked(handle.name);
     await refreshSavedFileList();
@@ -819,7 +1247,15 @@
       });
       if (await useAppDirHandle(handle)) {
         showErrors([]);
-        setStatus("このアプリのフォルダを使えました。saveデータ と 仕様書一覧 に保存します。");
+        setStatus(
+          "このアプリのフォルダを使えました。JSONは " +
+            SAVE_FOLDER_NAME +
+            "、Excelは " +
+            EXCEL_LOAD_FOLDER_NAME +
+            " / " +
+            EXCEL_WRITE_FOLDER_NAME +
+            " です。"
+        );
         return true;
       }
     } catch (error) {
@@ -834,7 +1270,7 @@
     if (saveApi) {
       return true;
     }
-    if (appDirHandle && saveDirHandle && excelDirHandle) {
+    if (appDirHandle && saveDirHandle && excelDirHandle && excelWriteDirHandle) {
       if (await ensureSaveDirPermission(appDirHandle, "readwrite")) {
         return true;
       }
@@ -851,8 +1287,8 @@
   }
 
   async function writeExcelToHandle(filename, buffer) {
-    var fileHandle = await excelDirHandle.getFileHandle(filename, { create: true });
-    var writable = await fileHandle.createWritable();
+    var nested = await nestedFileHandle(excelWriteDirHandle, filename, true);
+    var writable = await nested.handle.createWritable();
     await writable.write(buffer);
     await writable.close();
   }
@@ -878,8 +1314,8 @@
         var data = await res.json();
         saveApi = true;
         saveApiBase = bases[i];
-        fillFileSelect(data.files || []);
-        setSaveFolderUiLinked("saveデータ");
+        fillFileSelect(data.files || [], data.folders || []);
+        setSaveFolderUiLinked(SAVE_FOLDER_NAME);
         refreshExcelFileList().catch(function () {});
         return true;
       } catch (error) {
@@ -917,12 +1353,12 @@
       if (!isFilled(row)) {
         return;
       }
-      var price = api.normalizePriceText(row.price);
-      var parsed = /^\d+(\.\d+)?$/.test(price) ? Number(price) : row.price.trim();
+        var price = api.normalizePriceText(row.price);
+        var parsed = /^\d+(\.\d+)?$/.test(price) ? Number(price) : row.price.trim();
       options.push({
         no: String(row.no == null ? "" : row.no).trim(),
-        name: row.name.trim(),
-        price: parsed,
+          name: row.name.trim(),
+          price: parsed,
       });
     });
 
@@ -942,74 +1378,203 @@
     };
   }
 
-  async function writeDocumentToSaveFolder(documentData) {
-    var filename = jsonFilename();
+  function updateOverwriteButton() {
+    var button = document.getElementById("overwriteJson");
+    if (!button) {
+      return;
+    }
+    button.disabled = !loadedJsonPath;
+    button.title = loadedJsonPath
+      ? loadedJsonPath + " を上書きします"
+      : "読み込んだJSON、またはsaveしたファイルを上書きします";
+  }
+
+  function rememberLoadedJson(name) {
+    loadedJsonPath = name || "";
+    if (loadedJsonPath) {
+      selectedSavedFile = loadedJsonPath;
+    }
+    updateOverwriteButton();
+  }
+
+  async function writeDocumentToRelativePath(documentData, rel) {
     var blob = new Blob([JSON.stringify(documentData, null, 2)], {
       type: "application/json;charset=utf-8",
     });
-    var fileHandle = await saveDirHandle.getFileHandle(filename, { create: true });
-    var writable = await fileHandle.createWritable();
+    var nested = await nestedFileHandle(saveDirHandle, rel, true, false);
+    var writable = await nested.handle.createWritable();
     await writable.write(blob);
     await writable.close();
-    return filename;
+    return rel;
   }
 
-  async function saveList() {
+  async function saveDocumentAt(documentData, rel, overwrite) {
+    if (saveApi) {
+      var put = await fetch(apiUrl("/api/saves/" + encodeURIComponent(rel)), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(documentData, null, 2),
+      });
+      if (!put.ok) {
+        throw new Error(SAVE_FOLDER_NAME + " へ保存できませんでした。");
+      }
+    } else {
+      if (!(await ensureAppFolder()) || !saveDirHandle) {
+        throw new Error("このアプリのフォルダ（index.html がある場所）を指定してください。");
+      }
+      await writeDocumentToRelativePath(documentData, rel);
+    }
+    rememberLoadedJson(rel);
+    await refreshSavedFileList();
+    renderSavedFileList();
+    setStatus((overwrite ? "上書きしました: " : SAVE_FOLDER_NAME + " に保存しました: ") + rel);
+    showDonePopup((overwrite ? "上書きしました。\n" : "保存が完了しました。\n") + rel);
+  }
+
+  async function listSaveFolders() {
+    if (saveApi) {
+      var res = await fetch(apiUrl("/api/saves"), { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(SAVE_FOLDER_NAME + " のフォルダ一覧を取得できませんでした。");
+      }
+      var data = await res.json();
+      return Array.isArray(data.folders) ? data.folders : [];
+    }
+    if (!saveDirHandle) {
+      return [];
+    }
+    return listDirectoryNames(saveDirHandle);
+  }
+
+  function closeSaveFolderDialog() {
+    pendingSaveDocument = null;
+    saveFolderNames = [];
+    if (!saveFolderDialog) {
+      return;
+    }
+    saveFolderDialog.classList.remove("is-open");
+    saveFolderDialog.hidden = true;
+  }
+
+  function renderSaveFolderChoices() {
+    if (!saveFolderChoices) {
+      return;
+    }
+    var keyword = saveFolderSearch ? saveFolderSearch.value.trim().toLowerCase() : "";
+    saveFolderChoices.replaceChildren();
+    var folders = saveFolderNames.filter(function (folder) {
+      return !keyword || String(folder).toLowerCase().indexOf(keyword) !== -1;
+    });
+    if (folders.length === 0) {
+      addPickerEmpty(
+        saveFolderChoices,
+        saveFolderNames.length ? "キーワードに一致するフォルダはありません" : "保存先のフォルダはまだありません"
+      );
+      return;
+    }
+    folders.forEach(function (folder) {
+      var item = document.createElement("li");
+      item.className = "folder";
+      item.textContent = folder;
+      item.setAttribute("role", "option");
+      item.addEventListener("click", function (event) {
+        event.stopPropagation();
+        commitSave(folder);
+      });
+      saveFolderChoices.appendChild(item);
+    });
+  }
+
+  function openSaveFolderDialog(folders) {
+    saveFolderNames = folders.slice().sort(function (a, b) {
+      return String(a).localeCompare(String(b), "ja");
+    });
+    if (saveFolderSearch) {
+      saveFolderSearch.value = "";
+    }
+    renderSaveFolderChoices();
+    saveFolderDialog.hidden = false;
+    saveFolderDialog.classList.add("is-open");
+    if (saveFolderSearch) {
+      saveFolderSearch.focus();
+    }
+  }
+
+  async function commitSave(folder) {
+    var documentData = pendingSaveDocument;
+    closeSaveFolderDialog();
+    if (!documentData || !folder) {
+      return;
+    }
     showErrors([]);
+    try {
+      await saveDocumentAt(documentData, jsonRelativePath(folder), false);
+    } catch (error) {
+      showErrors([error && error.message ? error.message : SAVE_FOLDER_NAME + " へ保存できませんでした。"]);
+    }
+  }
+
+  async function overwriteSave() {
+    showErrors([]);
+    closeSavedFileMenu();
+    if (!loadedJsonPath) {
+      showErrors(["上書きするファイルがありません。先にJSONを読み込むか、saveするで保存してください。"]);
+      return;
+    }
     var documentData = buildDocumentData();
     if (
       !documentData.specName &&
       documentData.options.length === 0 &&
       (documentData.basePrice === "" || documentData.basePrice == null)
     ) {
-      showErrors(["保存する仕様名、本体価格、またはオプションがありません。"]);
+      showErrors(["保存する図番番号、本体価格、またはオプションがありません。"]);
+      return;
+    }
+    if (!window.confirm("「" + loadedJsonPath + "」を上書きします。よろしいですか？")) {
       return;
     }
     if (!saveApi) {
       await probeSaveApi();
     }
-    if (saveApi) {
-      try {
-        var apiName = jsonFilename();
-        var put = await fetch(apiUrl("/api/saves/" + encodeURIComponent(apiName)), {
-          method: "PUT",
-          headers: { "Content-Type": "application/json; charset=utf-8" },
-          body: JSON.stringify(documentData, null, 2),
-        });
-        if (!put.ok) {
-          throw new Error("saveデータ フォルダへ保存できませんでした。");
-        }
-        await refreshSavedFileList();
-        selectedSavedFile = apiName;
-        renderSavedFileList();
-        setStatus("saveデータ に保存しました: " + apiName);
-        showDonePopup("保存が完了しました。\n" + apiName);
-        return;
-      } catch (error) {
-        showErrors([error && error.message ? error.message : "saveデータ フォルダへ保存できませんでした。"]);
-        return;
-      }
+    try {
+      await saveDocumentAt(documentData, loadedJsonPath, true);
+    } catch (error) {
+      showErrors([error && error.message ? error.message : SAVE_FOLDER_NAME + " へ上書きできませんでした。"]);
     }
-    if (!(await ensureAppFolder())) {
+  }
+
+  async function saveList() {
+    showErrors([]);
+    closeSavedFileMenu();
+    var documentData = buildDocumentData();
+    if (
+      !documentData.specName &&
+      documentData.options.length === 0 &&
+      (documentData.basePrice === "" || documentData.basePrice == null)
+    ) {
+      showErrors(["保存する図番番号、本体価格、またはオプションがありません。"]);
+      return;
+    }
+    if (!saveApi) {
+      await probeSaveApi();
+    }
+    if (!saveApi && !(await ensureAppFolder())) {
       showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。"]);
       return;
     }
     try {
-      var savedName = await writeDocumentToSaveFolder(documentData);
-      await refreshSavedFileList();
-      selectedSavedFile = savedName;
-      renderSavedFileList();
-      setStatus("saveデータ に保存しました: " + savedName);
-      showDonePopup("保存が完了しました。\n" + savedName);
+      pendingSaveDocument = documentData;
+      openSaveFolderDialog(await listSaveFolders());
     } catch (error) {
-      showErrors([error && error.message ? error.message : "saveデータ フォルダへ保存できませんでした。"]);
+      pendingSaveDocument = null;
+      showErrors([error && error.message ? error.message : SAVE_FOLDER_NAME + " のフォルダ一覧を取得できませんでした。"]);
     }
   }
 
   function applyLoaded(data) {
     if (!data || typeof data !== "object" || Array.isArray(data) || !Array.isArray(data.options)) {
       showErrors(["一覧ファイルの形式が正しくありません。"]);
-      return;
+      return false;
     }
 
     var inputRows = Number(data.inputRows);
@@ -1025,7 +1590,7 @@
       var item = data.options[i];
       if (!item || typeof item !== "object") {
         showErrors(["一覧ファイルの " + (i + 1) + " 件目が正しくありません。"]);
-        return;
+        return false;
       }
       nextRows.push({
         no: item.no == null ? "" : String(item.no).trim(),
@@ -1049,7 +1614,11 @@
 
     specNameInput.value = data.specName == null ? "" : String(data.specName);
     if (modelNameInput) {
-      modelNameInput.value = data.modelName == null ? "" : String(data.modelName);
+      var loadedModel = data.modelName == null ? "" : String(data.modelName);
+      if (!loadedModel.trim() && data.modelFolder) {
+        loadedModel = String(data.modelFolder);
+      }
+      modelNameInput.value = loadedModel;
     }
     if (drawingNoInput) {
       drawingNoInput.value = data.drawingNo == null ? "" : String(data.drawingNo);
@@ -1082,6 +1651,7 @@
     );
     render(continueIndex);
     updatePreview();
+    return true;
   }
 
   function excelNameToSpec(filename) {
@@ -1147,7 +1717,7 @@
         return;
       }
       var name = exportFileHandle.name;
-      var file = await exportFileHandle.getFile();
+      var file = await readHandleFile(exportFileHandle);
       var source = await file.arrayBuffer();
       var next = await api.writeCalcRowToXlsx(source, row, {
         a: lastPreview.basePrice,
@@ -1182,12 +1752,18 @@
       return Promise.resolve();
     }
     return api.readXlsxOptions(buffer).then(function (parsed) {
+      loadedJsonPath = "";
+      updateOverwriteButton();
       applyLoaded({
-        specName: parsed.specName || specNameInput.value.trim() || excelNameToSpec(filename),
+        specName:
+          parsed.specName ||
+          specNameInput.value.trim() ||
+          excelNameToSpec(String(filename || "").split("/").pop()),
         basePrice: parsed.basePrice !== "" ? parsed.basePrice : basePriceInput.value,
         inputRows: Number(inputRowsSelect.value),
         selectedNos: selectedNosInput.value,
         options: parsed.options,
+        modelFolder: folderFromSavedPath(filename),
       });
       setStatus("Excelから " + parsed.options.length + " 件を入力しました。");
     });
@@ -1206,11 +1782,11 @@
       try {
         var excelRes = await fetch(apiUrl("/api/excels/" + encodeURIComponent(name)), { cache: "no-store" });
         if (!excelRes.ok) {
-          throw new Error("仕様書一覧 から読み込めませんでした。");
+          throw new Error(EXCEL_LOAD_FOLDER_NAME + " から読み込めませんでした。");
         }
         await applyExcelBuffer(await excelRes.arrayBuffer(), name);
       } catch (error) {
-        showErrors([error && error.message ? error.message : "Excelを読み込めませんでした。"]);
+        showErrors([fsAccessMessage(error, "Excelを読み込めませんでした。")]);
       }
       return;
     }
@@ -1221,14 +1797,14 @@
     try {
       var ok = await ensureSaveDirPermission(excelDirHandle, "read");
       if (!ok) {
-        showErrors(["仕様書一覧 フォルダへのアクセスが切れました。もう一度指定してください。"]);
+        showErrors([EXCEL_LOAD_FOLDER_NAME + " へのアクセスが切れました。もう一度指定してください。"]);
         return;
       }
-      var fileHandle = await excelDirHandle.getFileHandle(name);
-      var file = await fileHandle.getFile();
+      var fileHandle = (await nestedFileHandle(excelDirHandle, name, false)).handle;
+      var file = await readHandleFile(fileHandle);
       await applyExcelBuffer(await file.arrayBuffer(), name);
     } catch (error) {
-      showErrors([error && error.message ? error.message : "Excelを読み込めませんでした。"]);
+      showErrors([fsAccessMessage(error, "Excelを読み込めませんでした。")]);
     }
   }
 
@@ -1247,21 +1823,45 @@
     reader.readAsText(file, "utf-8");
   }
 
-  async function loadSelectedSavedFile() {
+  async function removeEmptyFolder(root, folderName) {
+    if (!folderName || typeof root.removeEntry !== "function") {
+      return;
+    }
+    try {
+      await root.removeEntry(folderName);
+    } catch (error) {
+      // 中にファイルが残っていればそのまま
+    }
+  }
+
+  async function deleteSelectedSavedFile() {
     var name = selectedSavedFile;
     if (!name) {
-      showErrors(["読み込む保存済みファイルを選んでください。"]);
+      showErrors(["消す保存済みファイルを選んでください。"]);
       return;
+    }
+    if (!window.confirm("「" + name + "」を削除します。よろしいですか？")) {
+      return;
+    }
+    showErrors([]);
+    if (!saveApi) {
+      await probeSaveApi();
     }
     if (saveApi) {
       try {
-        var apiRes = await fetch(apiUrl("/api/saves/" + encodeURIComponent(name)), { cache: "no-store" });
-        if (!apiRes.ok) {
-          throw new Error("saveデータ から読み込めませんでした。");
+        var del = await fetch(apiUrl("/api/saves/" + encodeURIComponent(name)), { method: "DELETE" });
+        if (!del.ok) {
+          throw new Error(SAVE_FOLDER_NAME + " から削除できませんでした。");
         }
-        applyLoaded(await apiRes.json());
+        selectedSavedFile = "";
+        if (loadedJsonPath === name) {
+          rememberLoadedJson("");
+        }
+        await refreshSavedFileList();
+        setStatus("JSONを削除しました: " + name);
+        showDonePopup("JSONを削除しました。\n" + name);
       } catch (error) {
-        showErrors([error && error.message ? error.message : "saveデータ から読み込めませんでした。"]);
+        showErrors([error && error.message ? error.message : SAVE_FOLDER_NAME + " から削除できませんでした。"]);
       }
       return;
     }
@@ -1270,18 +1870,98 @@
       return;
     }
     try {
-      var ok = await ensureSaveDirPermission(saveDirHandle, "read");
+      var ok = await ensureSaveDirPermission(saveDirHandle, "readwrite");
       if (!ok) {
-        saveDirHandle = null;
-        setSaveFolderUiUnlinked("saveデータ フォルダへのアクセスが切れました。もう一度指定してください。");
-        showErrors(["saveデータ から読み込めませんでした。"]);
+        showErrors([SAVE_FOLDER_NAME + " へのアクセスが切れました。もう一度指定してください。"]);
         return;
       }
-      var fileHandle = await saveDirHandle.getFileHandle(name);
-      var file = await fileHandle.getFile();
-      loadList(file);
+      var nested = await nestedFileHandle(saveDirHandle, name, false);
+      await nested.dir.removeEntry(nested.name);
+      await removeEmptyFolder(saveDirHandle, folderFromSavedPath(name));
+      selectedSavedFile = "";
+      if (loadedJsonPath === name) {
+        rememberLoadedJson("");
+      }
+      await refreshSavedFileList();
+      setStatus("JSONを削除しました: " + name);
+      showDonePopup("JSONを削除しました。\n" + name);
     } catch (error) {
-      showErrors([error && error.message ? error.message : "saveデータ から読み込めませんでした。"]);
+      showErrors([error && error.message ? error.message : SAVE_FOLDER_NAME + " から削除できませんでした。"]);
+    }
+  }
+
+  async function loadSavedJsonFromApi(name) {
+    var apiRes = await fetch(apiUrl("/api/saves/" + encodeURIComponent(name)), { cache: "no-store" });
+    if (!apiRes.ok) {
+      throw new Error(SAVE_FOLDER_NAME + " から読み込めませんでした。");
+    }
+    var loaded = await apiRes.json();
+    loaded.modelFolder = folderFromSavedPath(name);
+    if (applyLoaded(loaded)) {
+      rememberLoadedJson(name);
+    }
+  }
+
+  function readSavedJsonFile(file, name) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+          var loaded = JSON.parse(String(reader.result));
+          loaded.modelFolder = folderFromSavedPath(name);
+          if (applyLoaded(loaded)) {
+            rememberLoadedJson(name);
+          }
+      } catch (parseError) {
+        showErrors(["一覧ファイルを読み込めませんでした。JSON形式か確認してください。"]);
+      }
+    };
+    reader.onerror = function () {
+      showErrors(["一覧ファイルを読み込めませんでした。"]);
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  async function loadSelectedSavedFile(permissionPromise) {
+    var name = selectedSavedFile;
+    if (!name) {
+      showErrors(["読み込む保存済みファイルを選んでください。"]);
+      return;
+    }
+    showErrors([]);
+    if (!saveApi) {
+      await probeSaveApi();
+    }
+    if (saveApi) {
+      try {
+        await loadSavedJsonFromApi(name);
+      } catch (error) {
+        showErrors([error && error.message ? error.message : SAVE_FOLDER_NAME + " から読み込めませんでした。"]);
+      }
+      return;
+    }
+    if (saveDirHandle && permissionPromise) {
+      await permissionPromise;
+    }
+    if (!(saveDirHandle && (await ensureSaveDirPermission(saveDirHandle, "readwrite")))) {
+      if (!(await ensureAppFolder()) || !saveDirHandle) {
+        showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。"]);
+        return;
+      }
+    }
+    try {
+      var nested = await nestedFileHandle(saveDirHandle, name, false);
+      var file = await readHandleFile(nested.handle);
+      readSavedJsonFile(file, name);
+    } catch (error) {
+      if (!saveApi && (await probeSaveApi())) {
+        try {
+          await loadSavedJsonFromApi(name);
+          return;
+        } catch (apiError) {
+          error = apiError;
+        }
+      }
+      showErrors([fsAccessMessage(error, SAVE_FOLDER_NAME + " から読み込めませんでした。")]);
     }
   }
 
@@ -1303,7 +1983,7 @@
     try {
       var workbook = api.buildOptionWorkbook(checked);
       var buffer = await workbook.xlsx.writeBuffer();
-      var filename = api.sanitizeFilename(checked.specName);
+      var filename = excelRelativePath(api.sanitizeFilename(checked.specName));
       if (!saveApi) {
         await probeSaveApi();
       }
@@ -1316,29 +1996,15 @@
           body: buffer,
         });
         if (!put.ok) {
-          throw new Error("仕様書一覧 フォルダへ保存できませんでした。");
+          throw new Error(EXCEL_WRITE_FOLDER_NAME + " へ保存できませんでした。");
         }
-        try {
-          await refreshExcelFileList();
-          selectedExcelFile = filename;
-          renderExcelFileList();
-        } catch (refreshError) {
-          // 保存自体は成功している
-        }
-        setStatus("仕様書一覧 に保存しました: " + filename);
+        setStatus(EXCEL_WRITE_FOLDER_NAME + " に保存しました: " + filename);
         showDonePopup("Excelの作成が完了しました。\n" + filename);
         return;
       }
       if (await ensureAppFolder()) {
         await writeExcelToHandle(filename, buffer);
-        try {
-          await refreshExcelFileList();
-          selectedExcelFile = filename;
-          renderExcelFileList();
-        } catch (refreshError) {
-          // 保存自体は成功している
-        }
-        setStatus("仕様書一覧 に保存しました: " + filename);
+        setStatus(EXCEL_WRITE_FOLDER_NAME + " に保存しました: " + filename);
         showDonePopup("Excelの作成が完了しました。\n" + filename);
         return;
       }
@@ -1359,9 +2025,19 @@
     chooseSaveFolder();
   });
   loadSavedFileButton.addEventListener("click", function () {
-    loadSelectedSavedFile();
+    var permissionPromise =
+      !saveApi && saveDirHandle ? askPermission(saveDirHandle, "readwrite") : Promise.resolve(false);
+    loadSelectedSavedFile(permissionPromise);
   });
+  if (deleteJsonButton) {
+    deleteJsonButton.addEventListener("click", function () {
+      deleteSelectedSavedFile();
+    });
+  }
   loadExcelFileButton.addEventListener("click", function () {
+    if (!saveApi && excelDirHandle) {
+      askPermission(excelDirHandle, "readwrite");
+    }
     loadSelectedExcelFile();
   });
   if (writeCalcRowButton) {
@@ -1372,6 +2048,27 @@
   if (chooseExportExcelButton) {
     chooseExportExcelButton.addEventListener("click", function () {
       chooseExportExcelFile();
+    });
+  }
+  if (chooseMarkExcelButton) {
+    chooseMarkExcelButton.addEventListener("click", function () {
+      if (!markExcelInput) {
+        showErrors(["このブラウザではExcelを選べません。"]);
+        return;
+      }
+      markExcelInput.value = "";
+      markExcelInput.click();
+    });
+  }
+  if (markExcelInput) {
+    markExcelInput.addEventListener("change", function () {
+      var file = markExcelInput.files && markExcelInput.files[0];
+      useMarkExcelFile(file);
+    });
+  }
+  if (loadMarkExcelButton) {
+    loadMarkExcelButton.addEventListener("click", function () {
+      loadMarkedOptionNos();
     });
   }
   savedFileToggle.addEventListener("click", function () {
@@ -1400,6 +2097,9 @@
     if (doneDialog.classList.contains("is-open")) {
       return;
     }
+    if (!event.target || !event.target.isConnected) {
+      return;
+    }
     if (savedFilePicker && !savedFilePicker.contains(event.target)) {
       closeSavedFileMenu();
     }
@@ -1409,6 +2109,10 @@
   });
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") {
+      return;
+    }
+    if (saveFolderDialog && saveFolderDialog.classList.contains("is-open")) {
+      closeSaveFolderDialog();
       return;
     }
     if (doneDialog.classList.contains("is-open")) {
@@ -1421,6 +2125,31 @@
   document.getElementById("saveJson").addEventListener("click", function () {
     saveList();
   });
+  var overwriteJsonButton = document.getElementById("overwriteJson");
+  if (overwriteJsonButton) {
+    overwriteJsonButton.addEventListener("click", function () {
+      overwriteSave();
+    });
+  }
+  updateOverwriteButton();
+  if (saveFolderCancel) {
+    saveFolderCancel.addEventListener("click", function (event) {
+      event.stopPropagation();
+      closeSaveFolderDialog();
+    });
+  }
+  if (saveFolderSearch) {
+    saveFolderSearch.addEventListener("input", function () {
+      renderSaveFolderChoices();
+    });
+  }
+  if (saveFolderDialog) {
+    saveFolderDialog.addEventListener("click", function (event) {
+      if (event.target === saveFolderDialog) {
+        closeSaveFolderDialog();
+      }
+    });
+  }
   document.getElementById("buildExcel").addEventListener("click", function () {
     buildExcel();
   });
@@ -1453,4 +2182,5 @@
   updatePreview();
   initSaveFolder();
   restoreExportExcelFile();
+  updateMarkExcelStatus();
 })();

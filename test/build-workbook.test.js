@@ -7,9 +7,11 @@ const path = require("path");
 const {
   buildOptionWorkbook,
   sanitizeFilename,
+  sanitizeFolderName,
   validateOptionInput,
   previewOptionSelection,
   readXlsxOptions,
+  readMarkedOptionNos,
   writeCalcRowToXlsx,
   safeExportFilename,
   forceFullCalcOnLoad,
@@ -90,6 +92,13 @@ test("sanitizes Windows filenames", () => {
   assert.equal(sanitizeFilename("標準仕様A"), "標準仕様A_オプション.xlsx");
   assert.equal(sanitizeFilename(' a/b:c*?<>|" '), "a_b_c_______オプション.xlsx");
   assert.equal(sanitizeFilename("   "), "オプション_オプション.xlsx");
+});
+
+test("sanitizes 機種 folder names", () => {
+  assert.equal(sanitizeFolderName("ABC-100"), "ABC-100");
+  assert.equal(sanitizeFolderName(" a/b:c "), "a_b_c");
+  assert.equal(sanitizeFolderName(".."), "");
+  assert.equal(sanitizeFolderName("   "), "");
 });
 
 test("validates option rows and keeps leading zeros distinct", () => {
@@ -190,7 +199,7 @@ test("builds a 100-row workbook and writes the sample file", async () => {
   assert.equal(styles.includes('numFmtId="49"'), true);
   assert.equal(styles.includes('numFmtId="3"'), true);
 
-  assert.equal(input.includes(">仕様名</t>"), true);
+  assert.equal(input.includes(">図番番号</t>"), true);
   assert.equal(input.includes("<t>標準仕様A</t>"), true);
   assert.equal(input.includes(">本体価格</t>"), true);
   assert.equal(input.includes('<c r="B2" s="11"><v>2500000</v></c>'), true);
@@ -572,6 +581,95 @@ test("reads option rows from a generated workbook", async () => {
   ]);
 });
 
+test("reads circled option numbers from a spec Excel", async () => {
+  const xml =
+    '<?xml version="1.0"?>' +
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+    '<Worksheet ss:Name="仕様"><Table>' +
+    '<Row><Cell><Data ss:Type="Number">1</Data></Cell><Cell><Data ss:Type="String">サンルーフ</Data></Cell><Cell><Data ss:Type="String">○</Data></Cell></Row>' +
+    '<Row><Cell><Data ss:Type="Number">2</Data></Cell><Cell><Data ss:Type="String">ナビ</Data></Cell></Row>' +
+    '<Row><Cell><Data ss:Type="Number">3</Data></Cell><Cell><Data ss:Type="String">エアロ</Data></Cell><Cell><Data ss:Type="String">●</Data></Cell></Row>' +
+    "</Table></Worksheet></Workbook>";
+  const parsed = await readMarkedOptionNos(new TextEncoder().encode(xml));
+  assert.deepEqual(parsed.nos, ["1", "3"]);
+});
+
+test("reads circled options on both sides of a spec Excel", async () => {
+  const xml =
+    '<?xml version="1.0"?>' +
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+    '<Worksheet ss:Name="仕様"><Table>' +
+    '<Row ss:Index="1">' +
+    '<Cell ss:Index="1"><Data ss:Type="Number">1</Data></Cell>' +
+    '<Cell ss:Index="2"><Data ss:Type="String">左サンルーフ</Data></Cell>' +
+    '<Cell ss:Index="5"><Data ss:Type="Number">9</Data></Cell>' +
+    '<Cell ss:Index="6"><Data ss:Type="String">右マット</Data></Cell>' +
+    "</Row>" +
+    '<Row ss:Index="2">' +
+    '<Cell ss:Index="3"><Data ss:Type="String">○</Data></Cell>' +
+    '<Cell ss:Index="7"><Data ss:Type="String">○</Data></Cell>' +
+    "</Row>" +
+    '<Row ss:Index="3">' +
+    '<Cell ss:Index="1"><Data ss:Type="Number">2</Data></Cell>' +
+    '<Cell ss:Index="2"><Data ss:Type="String">左ナビ</Data></Cell>' +
+    '<Cell ss:Index="5"><Data ss:Type="Number">10</Data></Cell>' +
+    '<Cell ss:Index="6"><Data ss:Type="String">右エアロ</Data></Cell>' +
+    '<Cell ss:Index="7"><Data ss:Type="String">○</Data></Cell>' +
+    "</Row>" +
+    "</Table></Worksheet></Workbook>";
+  const parsed = await readMarkedOptionNos(new TextEncoder().encode(xml));
+  assert.deepEqual(parsed.nos, ["1", "9", "10"]);
+});
+
+test("reads prices from circled left-side options", async () => {
+  const xml =
+    '<?xml version="1.0"?>' +
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+    '<Worksheet ss:Name="仕様"><Table>' +
+    '<Row ss:Index="1">' +
+    '<Cell ss:Index="1"><Data ss:Type="Number">1</Data></Cell>' +
+    '<Cell ss:Index="2"><Data ss:Type="String">サンルーフ</Data></Cell>' +
+    '<Cell ss:Index="3"><Data ss:Type="Number">50000</Data></Cell>' +
+    '<Cell ss:Index="6"><Data ss:Type="Number">9</Data></Cell>' +
+    '<Cell ss:Index="7"><Data ss:Type="String">右マット</Data></Cell>' +
+    '<Cell ss:Index="8"><Data ss:Type="Number">999</Data></Cell>' +
+    "</Row>" +
+    '<Row ss:Index="2">' +
+    '<Cell ss:Index="4"><Data ss:Type="String">○</Data></Cell>' +
+    '<Cell ss:Index="9"><Data ss:Type="String">○</Data></Cell>' +
+    "</Row>" +
+    '<Row ss:Index="3">' +
+    '<Cell ss:Index="1"><Data ss:Type="Number">2</Data></Cell>' +
+    '<Cell ss:Index="2"><Data ss:Type="String">ナビ</Data></Cell>' +
+    '<Cell ss:Index="3"><Data ss:Type="Number">80000</Data></Cell>' +
+    "</Row>" +
+    "</Table></Worksheet></Workbook>";
+  const parsed = await readMarkedOptionNos(new TextEncoder().encode(xml));
+  assert.deepEqual(parsed.nos, ["1", "9"]);
+  assert.equal(parsed.options[0].no, "1");
+  assert.equal(parsed.options[0].name, "サンルーフ");
+  assert.equal(parsed.options[0].price, "50000");
+  assert.equal(parsed.options[1].no, "2");
+  assert.equal(parsed.options[1].price, "80000");
+});
+
+test("ignores a number written in the name column", async () => {
+  const xml =
+    '<?xml version="1.0"?>' +
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+    '<Worksheet ss:Name="仕様"><Table>' +
+    '<Row><Cell><Data ss:Type="String">番号</Data></Cell><Cell><Data ss:Type="String">品名</Data></Cell><Cell><Data ss:Type="String">選択</Data></Cell></Row>' +
+    '<Row><Cell><Data ss:Type="Number">1</Data></Cell><Cell><Data ss:Type="Number">9</Data></Cell><Cell><Data ss:Type="String">○</Data></Cell></Row>' +
+    '<Row><Cell><Data ss:Type="Number">2</Data></Cell><Cell><Data ss:Type="String">ナビ</Data></Cell></Row>' +
+    '<Row><Cell><Data ss:Type="Number">4</Data></Cell><Cell><Data ss:Type="String">エアロ</Data></Cell></Row>' +
+    '<Row><Cell><Data ss:Type="String">○</Data></Cell></Row>' +
+    "</Table></Worksheet></Workbook>";
+  const parsed = await readMarkedOptionNos(new TextEncoder().encode(xml));
+  assert.deepEqual(parsed.nos, ["1", "4"]);
+  assert.equal(parsed.options[0].name, "");
+  assert.equal(parsed.options[1].name, "ナビ");
+});
+
 test("the page is a classic offline script", () => {
   const html = fs.readFileSync(path.join(appDir, "index.html"), "utf8");
   assert.equal(/https?:\/\//.test(html), false);
@@ -584,14 +682,22 @@ test("the page is a classic offline script", () => {
   assert.equal(html.includes('type="module"'), false);
   assert.equal(html.includes('id="basePrice"'), true);
   assert.equal(html.includes('id="modelName"'), true);
+  assert.equal(html.includes("図番番号"), true);
   assert.equal(html.includes('id="drawingNo"'), true);
   assert.equal(html.includes('id="destination"'), true);
   assert.equal(html.includes('id="workNo"'), true);
-  assert.equal(html.includes("saveデータ"), true);
+  assert.equal(html.includes("saveデータ(読み込むよう）"), true);
   assert.equal(html.includes('id="saveJson"'), true);
+  assert.equal(html.includes('id="overwriteJson"'), true);
+  assert.equal(html.includes("上書き保存"), true);
+  assert.equal(html.includes('id="saveFolderDialog"'), true);
+  assert.equal(html.includes('id="deleteJson"'), true);
+  assert.equal(html.includes("JSONを消す"), true);
   assert.equal(html.includes('id="savedFileSearch"'), true);
+  assert.equal(html.includes("フォルダ名で検索"), true);
   assert.equal(html.includes("index.html"), true);
-  assert.equal(html.includes("仕様書一覧"), true);
+  assert.equal(html.includes("読み込み用excel"), true);
+  assert.equal(html.includes("書き込むエクセル"), true);
   assert.equal(html.includes('id="selectedNos"'), true);
   assert.equal(html.includes('id="doneDialog"'), true);
   assert.equal(html.includes("仕様書の計算"), true);
@@ -601,4 +707,7 @@ test("the page is a classic offline script", () => {
   assert.equal(html.includes('id="exportSelectedName"'), true);
   assert.equal(html.includes("エクセルに書き込む"), true);
   assert.equal(html.includes('id="writeCalcRow"'), true);
+  assert.equal(html.includes("該当するオプション"), true);
+  assert.equal(html.includes('id="chooseMarkExcel"'), true);
+  assert.equal(html.includes('id="loadMarkExcel"'), true);
 });
