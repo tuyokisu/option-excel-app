@@ -1,7 +1,4 @@
-test-output/
-saveデータ(読み込むよう）/*.json
-読み込み用excel/*.xlsx
-書き込むエクセル/*.xlsx
+
 *.xlsx
 .DS_Store
 Thumbs.db

@@ -686,7 +686,7 @@ test("the page is a classic offline script", () => {
   assert.equal(html.includes('id="drawingNo"'), true);
   assert.equal(html.includes('id="destination"'), true);
   assert.equal(html.includes('id="workNo"'), true);
-  assert.equal(html.includes("saveデータ(読み込むよう）"), true);
+  assert.equal(html.includes('id="chooseSaveDir"'), true);
   assert.equal(html.includes('id="saveJson"'), true);
   assert.equal(html.includes('id="overwriteJson"'), true);
   assert.equal(html.includes("上書き保存"), true);
@@ -696,8 +696,9 @@ test("the page is a classic offline script", () => {
   assert.equal(html.includes('id="savedFileSearch"'), true);
   assert.equal(html.includes("フォルダ名で検索"), true);
   assert.equal(html.includes("index.html"), true);
-  assert.equal(html.includes("読み込み用excel"), true);
-  assert.equal(html.includes("書き込むエクセル"), true);
+  assert.equal(html.includes('id="chooseExcelReadDir"'), true);
+  assert.equal(html.includes('id="chooseExcelWriteDir"'), false);
+  assert.equal(html.includes('id="buildExcel"'), false);
   assert.equal(html.includes('id="selectedNos"'), true);
   assert.equal(html.includes('id="doneDialog"'), true);
   assert.equal(html.includes("仕様書の計算"), true);

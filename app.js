@@ -28,8 +28,10 @@
   var doneDialog = document.getElementById("doneDialog");
   var doneDialogMessage = document.getElementById("doneDialogMessage");
   var doneDialogOk = document.getElementById("doneDialogOk");
-  var linkSaveFolderButton = document.getElementById("linkSaveFolder");
-  var saveFolderStatus = document.getElementById("saveFolderStatus");
+  var chooseSaveDirButton = document.getElementById("chooseSaveDir");
+  var saveDirStatus = document.getElementById("saveDirStatus");
+  var chooseExcelReadDirButton = document.getElementById("chooseExcelReadDir");
+  var excelReadDirStatus = document.getElementById("excelReadDirStatus");
   var savedFilePicker = document.getElementById("savedFilePicker");
   var savedFileToggle = document.getElementById("savedFileToggle");
   var savedFileSearch = document.getElementById("savedFileSearch");
@@ -73,15 +75,13 @@
   var exportFileHandle = null;
   var SAVE_DIR_DB = "option-excel-app";
   var SAVE_DIR_STORE = "handles";
-  var APP_DIR_KEY = "app-root";
+  var SAVE_DIR_KEY = "save-any-dir";
+  var EXCEL_READ_DIR_KEY = "excel-read-any-dir";
   var EXPORT_FILE_KEY = "export-xlsx";
   var SAVE_FOLDER_NAME = "saveデータ(読み込むよう）";
   var EXCEL_LOAD_FOLDER_NAME = "読み込み用excel";
-  var EXCEL_WRITE_FOLDER_NAME = "書き込むエクセル";
-  var appDirHandle = null;
   var saveDirHandle = null;
   var excelDirHandle = null;
-  var excelWriteDirHandle = null;
   var saveApi = false;
   var saveApiBase = "";
   var lastPreview = null;
@@ -457,11 +457,6 @@
     return dir ? dir + "/" + name : name;
   }
 
-  function excelRelativePath(filename) {
-    var folder = modelFolderName();
-    return folder ? folder + "/" + filename : filename;
-  }
-
   function folderFromSavedPath(rel) {
     var text = String(rel || "");
     var at = text.lastIndexOf("/");
@@ -614,7 +609,7 @@
 
   function fsAccessMessage(error, fallback) {
     if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
-      return "ブラウザがファイルの読み取りを拒否しました。ページを再読み込みし、「このアプリのフォルダを指定」でもう一度許可してから読み込んでください。";
+      return "ブラウザがファイルの読み取りを拒否しました。ページを再読み込みし、フォルダを選び直して許可してから読み込んでください。";
     }
     return (error && error.message) || fallback;
   }
@@ -899,7 +894,7 @@
     }
     if (exportTargetStatus) {
       exportTargetStatus.textContent = name
-        ? "このファイルに書き込みます（読み込み用のExcelとは別です）"
+        ? "このファイルに書き込みます。どのフォルダのExcelでも指定できます。"
         : "まだ選んでいません。「PCのExcelを選ぶ」を押してください。";
     }
   }
@@ -1104,52 +1099,38 @@
     });
   }
 
-  async function existingDirHandle(parent, name) {
-    try {
-      return await parent.getDirectoryHandle(name);
-    } catch (error) {
-      throw new Error(
-        "「" + name + "」フォルダが見つかりません。新しく作らず、あらかじめ用意したフォルダを使います。"
-      );
+  function updateDirUi() {
+    if (saveDirStatus) {
+      saveDirStatus.textContent = saveDirHandle
+        ? "選択中: " + saveDirHandle.name
+        : "JSONを読み書きするフォルダを選んでください。";
     }
-  }
-
-  function setSaveFolderUiLinked(name) {
-    saveFolderStatus.textContent =
-      "JSONは " +
-      SAVE_FOLDER_NAME +
-      "、Excelの読み込みは " +
-      EXCEL_LOAD_FOLDER_NAME +
-      "、Excelの作成は " +
-      EXCEL_WRITE_FOLDER_NAME +
-      " です。" +
-      (name ? "（" + name + "）" : "");
-    linkSaveFolderButton.hidden = saveApi;
-    linkSaveFolderButton.textContent = "アプリフォルダを変更";
-    savedFilePicker.hidden = false;
-    loadSavedFileButton.hidden = false;
+    if (savedFilePicker) {
+      savedFilePicker.hidden = !saveDirHandle;
+    }
+    if (!saveDirHandle) {
+      closeSavedFileMenu();
+    }
+    if (loadSavedFileButton) {
+      loadSavedFileButton.hidden = !saveDirHandle;
+    }
     if (deleteJsonButton) {
-      deleteJsonButton.hidden = false;
+      deleteJsonButton.hidden = !saveDirHandle;
     }
-    excelFilePicker.hidden = false;
-    loadExcelFileButton.hidden = false;
-  }
-
-  function setSaveFolderUiUnlinked(message) {
-    saveFolderStatus.textContent =
-      message ||
-      "初回だけ、index.html が入っているこのアプリのフォルダを選んでください。bat は不要です。";
-    linkSaveFolderButton.hidden = false;
-    linkSaveFolderButton.textContent = "このアプリのフォルダを指定";
-    savedFilePicker.hidden = true;
-    closeSavedFileMenu();
-    loadSavedFileButton.hidden = true;
-    if (deleteJsonButton) {
-      deleteJsonButton.hidden = true;
+    if (excelReadDirStatus) {
+      excelReadDirStatus.textContent = excelDirHandle
+        ? "選択中: " + excelDirHandle.name
+        : "読み込むExcelがあるフォルダを選んでください。";
     }
-    excelFilePicker.hidden = true;
-    closeExcelFileMenu();
-    loadExcelFileButton.hidden = true;
+    if (excelFilePicker) {
+      excelFilePicker.hidden = !excelDirHandle;
+    }
+    if (!excelDirHandle) {
+      closeExcelFileMenu();
+    }
+    if (loadExcelFileButton) {
+      loadExcelFileButton.hidden = !excelDirHandle;
+    }
   }
 
   async function listSavedJsonFiles(handle) {
@@ -1176,6 +1157,8 @@
     }
     var excelOk = await ensureSaveDirPermission(excelDirHandle, "read");
     if (!excelOk) {
+      excelDirHandle = null;
+      updateDirUi();
       fillExcelSelect([]);
       return;
     }
@@ -1195,156 +1178,149 @@
     }
     if (!saveDirHandle) {
       fillFileSelect([]);
-      fillExcelSelect([]);
       return;
     }
     var ok = await ensureSaveDirPermission(saveDirHandle, "read");
     if (!ok) {
-      appDirHandle = null;
       saveDirHandle = null;
-      excelDirHandle = null;
-      excelWriteDirHandle = null;
-      setSaveFolderUiUnlinked("フォルダへのアクセスが切れました。もう一度、このアプリのフォルダを指定してください。");
+      updateDirUi();
+      fillFileSelect([]);
       return;
     }
     fillFileSelect(await listSavedJsonFiles(saveDirHandle), await listDirectoryNames(saveDirHandle));
-    await refreshExcelFileList();
   }
 
-  async function useAppDirHandle(handle) {
-    if (!handle) {
-      return false;
+  function roleKey(role) {
+    return role === "save" ? SAVE_DIR_KEY : EXCEL_READ_DIR_KEY;
+  }
+
+  function rolePickerId(role) {
+    return role === "save" ? "option-excel-save-any" : "option-excel-read-any";
+  }
+
+  function roleCurrent(role) {
+    return role === "save" ? saveDirHandle : excelDirHandle;
+  }
+
+  function roleAssign(role, handle) {
+    if (role === "save") {
+      saveDirHandle = handle;
+    } else {
+      excelDirHandle = handle;
     }
-    var ok = await ensureSaveDirPermission(handle, "readwrite");
-    if (!ok) {
-      return false;
-    }
+  }
+
+  async function rememberDirectory(role, handle) {
+    roleAssign(role, handle);
     try {
-      await handle.getFileHandle("index.html");
+      await storeHandle(roleKey(role), handle);
     } catch (error) {
-      showErrors(["index.html があるフォルダ（このアプリのフォルダ）を選んでください。"]);
-      return false;
+      // フォルダ自体は使える。次回の復元だけ失敗する
     }
-    appDirHandle = handle;
-    saveDirHandle = await existingDirHandle(handle, SAVE_FOLDER_NAME);
-    excelDirHandle = await existingDirHandle(handle, EXCEL_LOAD_FOLDER_NAME);
-    excelWriteDirHandle = await existingDirHandle(handle, EXCEL_WRITE_FOLDER_NAME);
-    await storeHandle(APP_DIR_KEY, handle);
-    setSaveFolderUiLinked(handle.name);
-    await refreshSavedFileList();
-    return true;
+    updateDirUi();
   }
 
-  async function chooseAppFolder() {
+  async function pickAnyDirectory(role) {
     if (!supportsSaveFolder()) {
       showErrors(["Edge または Chrome で index.html を開いてください。"]);
-      return false;
+      return null;
     }
     try {
-      var handle = await window.showDirectoryPicker({
-        id: "option-excel-app-root",
+      return await window.showDirectoryPicker({
+        id: rolePickerId(role),
         mode: "readwrite",
       });
-      if (await useAppDirHandle(handle)) {
-        showErrors([]);
-        setStatus(
-          "このアプリのフォルダを使えました。JSONは " +
-            SAVE_FOLDER_NAME +
-            "、Excelは " +
-            EXCEL_LOAD_FOLDER_NAME +
-            " / " +
-            EXCEL_WRITE_FOLDER_NAME +
-            " です。"
-        );
-        return true;
-      }
     } catch (error) {
       if (error && error.name !== "AbortError") {
         showErrors([error.message || "フォルダを指定できませんでした。"]);
       }
+      return null;
     }
-    return false;
   }
 
-  async function ensureAppFolder() {
-    if (saveApi) {
-      return true;
+  async function chooseRole(role) {
+    var handle = await pickAnyDirectory(role);
+    if (!handle) {
+      return null;
     }
-    if (appDirHandle && saveDirHandle && excelDirHandle && excelWriteDirHandle) {
-      if (await ensureSaveDirPermission(appDirHandle, "readwrite")) {
-        return true;
-      }
+    if (!(await ensureSaveDirPermission(handle, "readwrite"))) {
+      showErrors(["フォルダのアクセスが許可されませんでした。"]);
+      return null;
+    }
+    await rememberDirectory(role, handle);
+    showErrors([]);
+    return handle;
+  }
+
+  async function ensureRole(role) {
+    var current = roleCurrent(role);
+    if (current && (await ensureSaveDirPermission(current, "readwrite"))) {
+      return current;
     }
     try {
-      var stored = await readStoredHandle(APP_DIR_KEY);
-      if (stored && (await useAppDirHandle(stored))) {
-        return true;
+      var stored = await readStoredHandle(roleKey(role));
+      if (stored && (await ensureSaveDirPermission(stored, "readwrite"))) {
+        await rememberDirectory(role, stored);
+        return stored;
       }
     } catch (error) {
-      // ignore
+      // 保存済みのフォルダが使えなければ、選び直す
     }
-    return chooseAppFolder();
+    return chooseRole(role);
   }
 
-  async function writeExcelToHandle(filename, buffer) {
-    var nested = await nestedFileHandle(excelWriteDirHandle, filename, true);
-    var writable = await nested.handle.createWritable();
-    await writable.write(buffer);
-    await writable.close();
-  }
-
-  function chooseSaveFolder() {
-    return chooseAppFolder();
+  async function restoreDirectories() {
+    var roles = ["save", "excel-read"];
+    var i;
+    for (i = 0; i < roles.length; i += 1) {
+      try {
+        var stored = await readStoredHandle(roleKey(roles[i]));
+        if (!stored || typeof stored.queryPermission !== "function") {
+          continue;
+        }
+        var state = await stored.queryPermission({ mode: "readwrite" });
+        if (state !== "granted") {
+          state = await stored.queryPermission({ mode: "read" });
+        }
+        if (state === "granted") {
+          roleAssign(roles[i], stored);
+        }
+      } catch (error) {
+        // 復元できないフォルダは未選択のままにする
+      }
+    }
+    updateDirUi();
+    if (saveDirHandle) {
+      try {
+        await refreshSavedFileList();
+      } catch (error) {
+        // 一覧は次にフォルダを開いたときに取り直す
+      }
+    }
+    if (excelDirHandle) {
+      try {
+        await refreshExcelFileList();
+      } catch (error) {
+        // 一覧は次にフォルダを開いたときに取り直す
+      }
+    }
   }
 
   async function probeSaveApi() {
-    var bases = [""];
-    if (window.location.protocol === "file:") {
-      bases = ["http://127.0.0.1:8765"];
-    } else {
-      bases.push("http://127.0.0.1:8765");
-    }
-    var i;
-    for (i = 0; i < bases.length; i += 1) {
-      try {
-        var res = await fetch(bases[i] + "/api/saves", { cache: "no-store" });
-        if (!res.ok) {
-          continue;
-        }
-        var data = await res.json();
-        saveApi = true;
-        saveApiBase = bases[i];
-        fillFileSelect(data.files || [], data.folders || []);
-        setSaveFolderUiLinked(SAVE_FOLDER_NAME);
-        refreshExcelFileList().catch(function () {});
-        return true;
-      } catch (error) {
-        // try next
-      }
-    }
     saveApi = false;
     saveApiBase = "";
     return false;
   }
 
   async function initSaveFolder() {
-    if (await probeSaveApi()) {
-      return;
-    }
+    saveApi = false;
     if (!supportsSaveFolder()) {
-      setSaveFolderUiUnlinked("Edge または Chrome で index.html を開いてください。");
-      linkSaveFolderButton.hidden = true;
+      if (saveDirStatus) {
+        saveDirStatus.textContent = "Edge または Chrome で index.html を開いてください。";
+      }
       return;
     }
-    try {
-      var stored = await readStoredHandle(APP_DIR_KEY);
-      if (stored && (await useAppDirHandle(stored))) {
-        return;
-      }
-    } catch (error) {
-      // ignore restore errors
-    }
-    setSaveFolderUiUnlinked();
+    await restoreDirectories();
   }
 
   function buildDocumentData() {
@@ -1419,15 +1395,15 @@
         throw new Error(SAVE_FOLDER_NAME + " へ保存できませんでした。");
       }
     } else {
-      if (!(await ensureAppFolder()) || !saveDirHandle) {
-        throw new Error("このアプリのフォルダ（index.html がある場所）を指定してください。");
+      if (!(await ensureRole("save"))) {
+        throw new Error("JSONを読み書きするフォルダを選んでください。");
       }
       await writeDocumentToRelativePath(documentData, rel);
     }
     rememberLoadedJson(rel);
     await refreshSavedFileList();
     renderSavedFileList();
-    setStatus((overwrite ? "上書きしました: " : SAVE_FOLDER_NAME + " に保存しました: ") + rel);
+    setStatus((overwrite ? "上書きしました: " : "保存しました: ") + rel);
     showDonePopup((overwrite ? "上書きしました。\n" : "保存が完了しました。\n") + rel);
   }
 
@@ -1462,15 +1438,29 @@
     }
     var keyword = saveFolderSearch ? saveFolderSearch.value.trim().toLowerCase() : "";
     saveFolderChoices.replaceChildren();
+    var rootName = saveDirHandle && saveDirHandle.name ? saveDirHandle.name : "選択中のフォルダ";
+    var rootLabel = rootName + "（このフォルダに保存）";
+    var showRoot = !keyword || rootLabel.toLowerCase().indexOf(keyword) !== -1;
     var folders = saveFolderNames.filter(function (folder) {
       return !keyword || String(folder).toLowerCase().indexOf(keyword) !== -1;
     });
-    if (folders.length === 0) {
+    if (!showRoot && folders.length === 0) {
       addPickerEmpty(
         saveFolderChoices,
-        saveFolderNames.length ? "キーワードに一致するフォルダはありません" : "保存先のフォルダはまだありません"
+        saveFolderNames.length || saveDirHandle ? "キーワードに一致するフォルダはありません" : "保存先のフォルダはまだありません"
       );
       return;
+    }
+    if (showRoot) {
+      var rootItem = document.createElement("li");
+      rootItem.className = "folder";
+      rootItem.textContent = rootLabel;
+      rootItem.setAttribute("role", "option");
+      rootItem.addEventListener("click", function (event) {
+        event.stopPropagation();
+        commitSave("");
+      });
+      saveFolderChoices.appendChild(rootItem);
     }
     folders.forEach(function (folder) {
       var item = document.createElement("li");
@@ -1503,7 +1493,7 @@
   async function commitSave(folder) {
     var documentData = pendingSaveDocument;
     closeSaveFolderDialog();
-    if (!documentData || !folder) {
+    if (!documentData || folder == null) {
       return;
     }
     showErrors([]);
@@ -1558,8 +1548,8 @@
     if (!saveApi) {
       await probeSaveApi();
     }
-    if (!saveApi && !(await ensureAppFolder())) {
-      showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。"]);
+    if (!(await ensureRole("save"))) {
+      showErrors(["JSONを読み書きするフォルダを選んでください。"]);
       return;
     }
     try {
@@ -1709,7 +1699,7 @@
     }
     try {
       if (!exportFileHandle) {
-        showErrors(["書き込み先は、読み込み用とは別のExcelを「PCのExcelを選ぶ」から指定してください。"]);
+        showErrors(["書き込み先のExcelを「PCのExcelを選ぶ」から指定してください。"]);
         return;
       }
       if (!(await useExportFileHandle(exportFileHandle))) {
@@ -1790,14 +1780,14 @@
       }
       return;
     }
-    if (!(await ensureAppFolder()) || !excelDirHandle) {
-      showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。"]);
+    if (!(await ensureRole("excel-read"))) {
+      showErrors(["読み込むExcelのフォルダを選んでください。"]);
       return;
     }
     try {
       var ok = await ensureSaveDirPermission(excelDirHandle, "read");
       if (!ok) {
-        showErrors([EXCEL_LOAD_FOLDER_NAME + " へのアクセスが切れました。もう一度指定してください。"]);
+        showErrors(["読み込むExcelのフォルダへのアクセスが切れました。もう一度選んでください。"]);
         return;
       }
       var fileHandle = (await nestedFileHandle(excelDirHandle, name, false)).handle;
@@ -1865,14 +1855,14 @@
       }
       return;
     }
-    if (!(await ensureAppFolder()) || !saveDirHandle) {
-      showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。"]);
+    if (!(await ensureRole("save"))) {
+      showErrors(["JSONを読み書きするフォルダを選んでください。"]);
       return;
     }
     try {
       var ok = await ensureSaveDirPermission(saveDirHandle, "readwrite");
       if (!ok) {
-        showErrors([SAVE_FOLDER_NAME + " へのアクセスが切れました。もう一度指定してください。"]);
+        showErrors(["JSONフォルダへのアクセスが切れました。もう一度選んでください。"]);
         return;
       }
       var nested = await nestedFileHandle(saveDirHandle, name, false);
@@ -1943,8 +1933,8 @@
       await permissionPromise;
     }
     if (!(saveDirHandle && (await ensureSaveDirPermission(saveDirHandle, "readwrite")))) {
-      if (!(await ensureAppFolder()) || !saveDirHandle) {
-        showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。"]);
+      if (!(await ensureRole("save"))) {
+        showErrors(["JSONを読み書きするフォルダを選んでください。"]);
         return;
       }
     }
@@ -1965,55 +1955,6 @@
     }
   }
 
-  async function buildExcel() {
-    showErrors([]);
-    setStatus("");
-
-    if (!api || typeof api.buildOptionWorkbook !== "function") {
-      showErrors(["必要なファイルを読み込めませんでした。フォルダ一式を同じ場所に置いて、index.html を開いてください。"]);
-      return;
-    }
-
-    var checked = api.validateOptionInput(currentPayload());
-    if (!checked.ok) {
-      showErrors(checked.errors);
-      return;
-    }
-
-    try {
-      var workbook = api.buildOptionWorkbook(checked);
-      var buffer = await workbook.xlsx.writeBuffer();
-      var filename = excelRelativePath(api.sanitizeFilename(checked.specName));
-      if (!saveApi) {
-        await probeSaveApi();
-      }
-      if (saveApi) {
-        var put = await fetch(apiUrl("/api/excels/" + encodeURIComponent(filename)), {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          },
-          body: buffer,
-        });
-        if (!put.ok) {
-          throw new Error(EXCEL_WRITE_FOLDER_NAME + " へ保存できませんでした。");
-        }
-        setStatus(EXCEL_WRITE_FOLDER_NAME + " に保存しました: " + filename);
-        showDonePopup("Excelの作成が完了しました。\n" + filename);
-        return;
-      }
-      if (await ensureAppFolder()) {
-        await writeExcelToHandle(filename, buffer);
-        setStatus(EXCEL_WRITE_FOLDER_NAME + " に保存しました: " + filename);
-        showDonePopup("Excelの作成が完了しました。\n" + filename);
-        return;
-      }
-      showErrors(["このアプリのフォルダ（index.html がある場所）を指定してください。Excelは Downloads には保存しません。"]);
-    } catch (error) {
-      showErrors([error && error.message ? error.message : "Excelを作成できませんでした。"]);
-    }
-  }
-
   document.getElementById("addRow").addEventListener("click", function () {
     rows.push(emptyRow());
     setStatus("");
@@ -2021,9 +1962,34 @@
     updatePreview();
   });
 
-  linkSaveFolderButton.addEventListener("click", function () {
-    chooseSaveFolder();
-  });
+  if (chooseSaveDirButton) {
+    chooseSaveDirButton.addEventListener("click", function () {
+      chooseRole("save").then(function (handle) {
+        if (!handle) {
+          return;
+        }
+        savedBrowseFolder = null;
+        setStatus("JSONフォルダ: " + handle.name);
+        refreshSavedFileList().catch(function (error) {
+          showErrors([error && error.message ? error.message : "JSON一覧を読めませんでした。"]);
+        });
+      });
+    });
+  }
+  if (chooseExcelReadDirButton) {
+    chooseExcelReadDirButton.addEventListener("click", function () {
+      chooseRole("excel-read").then(function (handle) {
+        if (!handle) {
+          return;
+        }
+        excelBrowseFolder = null;
+        setStatus("読み込むExcelのフォルダ: " + handle.name);
+        refreshExcelFileList().catch(function (error) {
+          showErrors([error && error.message ? error.message : "Excel一覧を読めませんでした。"]);
+        });
+      });
+    });
+  }
   loadSavedFileButton.addEventListener("click", function () {
     var permissionPromise =
       !saveApi && saveDirHandle ? askPermission(saveDirHandle, "readwrite") : Promise.resolve(false);
@@ -2150,10 +2116,6 @@
       }
     });
   }
-  document.getElementById("buildExcel").addEventListener("click", function () {
-    buildExcel();
-  });
-
   specNameInput.addEventListener("input", function () {
     setStatus("");
     updatePreview();

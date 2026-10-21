@@ -667,7 +667,7 @@
           <input id="workNo" type="text" autocomplete="off" placeholder="未入力可">
         </label>
       </div>
-      <p class="hint">図番番号は保存ファイル名とExcel名に使います。JSONは saveする のあと、saveデータ(読み込むよう） のフォルダを選んで保存します。機種を入れると、書き込むエクセル の中にそのフォルダを作ります。本体価格はExcelの総合計に含まれます。入力行数は、カンマ区切りの番号から作る品目リストの最大件数です。機種・図番・向け先・作番は空のままでも保存・書き込みできます。</p>
+      <p class="hint">図番番号は保存ファイル名に使います。JSONと読み込むExcelは、下の「読み込みと保存」で選んだフォルダを使います。計算結果の書き込みは、下の「PCのExcelを選ぶ」で選んだファイルへ行います。どのフォルダのファイルでも指定できます。本体価格は総合計に含まれます。入力行数は、カンマ区切りの番号から作る品目リストの最大件数です。機種・図番・向け先・作番は空のままでも保存・書き込みできます。</p>
     </section>
 
     <section class="card">
@@ -698,16 +698,16 @@
       <div class="table-head">
         <h2>読み込みと保存</h2>
       </div>
-      <div class="folder-row">
-        <button id="linkSaveFolder" type="button">このアプリのフォルダを指定</button>
-        <p id="saveFolderStatus">初回だけ、index.html が入っているフォルダを選んでください。bat は使いません。</p>
-      </div>
       <div id="errors" role="alert" hidden></div>
       <p id="status" hidden></p>
       <div class="io-grid">
         <div class="io-panel">
-          <h3>saveデータ(読み込むよう）（JSON）</h3>
-          <p class="hint">まずフォルダを選び、その中のJSONをクリックします。saveするはフォルダを選んで保存します。上書き保存は、読み込んだJSONか直前にsaveしたファイルを上書きします。</p>
+          <h3>JSON</h3>
+          <p class="hint">JSONを読み書きするフォルダを選んでください。PC上のどのフォルダでも使えます。一覧では中のフォルダを開いてからJSONを選びます。saveするでは、選んだフォルダ自身か、その中のフォルダへ保存します。上書き保存は、読み込んだJSONか直前にsaveしたファイルを上書きします。</p>
+          <div class="folder-row">
+            <button id="chooseSaveDir" type="button">JSONのフォルダを選ぶ</button>
+            <p id="saveDirStatus">未選択</p>
+          </div>
           <div id="savedFilePicker" class="file-picker" hidden>
             <button id="savedFileToggle" class="file-picker-toggle" type="button" aria-expanded="false" aria-haspopup="listbox">保存済みを選ぶ</button>
             <div id="savedFileMenu" class="file-picker-menu">
@@ -723,8 +723,12 @@
           </div>
         </div>
         <div class="io-panel">
-          <h3>読み込み用excel（Excel）</h3>
-          <p class="hint">開くたびに 読み込み用excel のフォルダと Excel を読み直します。A列ナンバー、B列品目、C列売価。</p>
+          <h3>Excel</h3>
+          <p class="hint">読み込むExcelがあるフォルダを選んでください。PC上のどのフォルダでも使えます。A列ナンバー、B列品目、C列売価です。</p>
+          <div class="folder-row">
+            <button id="chooseExcelReadDir" type="button">読み込むフォルダを選ぶ</button>
+            <p id="excelReadDirStatus">未選択</p>
+          </div>
           <div id="excelFilePicker" class="file-picker" hidden>
             <button id="excelFileToggle" class="file-picker-toggle" type="button" aria-expanded="false" aria-haspopup="listbox">Excelを選ぶ</button>
             <div id="excelFileMenu" class="file-picker-menu">
@@ -734,7 +738,6 @@
           </div>
           <div class="io-actions">
             <button id="loadExcelFile" type="button" hidden>Excelを読み込む</button>
-            <button id="buildExcel" class="primary" type="button">Excelを作成</button>
           </div>
         </div>
       </div>
@@ -813,7 +816,7 @@
       <p id="previewEmpty" class="hint">仕様書のオプション一覧がある状態で、番号を入力してください。</p>
       <div class="export-box">
         <h3>別のExcelへ書き込む</h3>
-        <p class="hint">読み込み用excel とは別の、既存のExcelをPCから選びます。選んだファイルの指定行へ、A列＝機種、B列＝図番、C列＝向け先、D列＝作番（空なら書きません）、E列＝本体価格、G列＝オプション番号、H列＝オプション価格 を入れます。違う仕様は行を変えて書き込みます（例: 2〜11行目）。</p>
+        <p class="hint">「PCのExcelを選ぶ」で、PC上のどのフォルダにあるExcelでも指定できます。選んだファイルの指定行へ、A列＝機種、B列＝図番、C列＝向け先、D列＝作番（空なら書きません）、E列＝本体価格、G列＝オプション番号、H列＝オプション価格 を入れます。違う仕様は行を変えて書き込みます（例: 2〜11行目）。</p>
         <div class="export-fields">
           <label class="field">
             書き込み先のExcel（別ファイル）
@@ -849,13 +852,13 @@
     </section>
 
     <aside class="note">
-      <p>フォルダごとPCにコピーし、index.html を Edge または Chrome で開いてください。初回だけこのアプリのフォルダを指定すると、saveデータ(読み込むよう） と 読み込み用excel / 書き込むエクセル を使います。bat は不要です。</p>
+      <p>フォルダごとPCにコピーし、index.html を Edge または Chrome で開いてください。JSONと読み込むExcelは好きなフォルダを選べます。計算の書き込み先は「PCのExcelを選ぶ」で、どのフォルダのファイルでも指定できます。bat は不要です。</p>
     </aside>
   </main>
   <div id="saveFolderDialog" class="folder-dialog" hidden>
     <div class="folder-dialog-card" role="dialog" aria-modal="true" aria-labelledby="saveFolderDialogTitle">
       <h3 id="saveFolderDialogTitle">保存先フォルダ</h3>
-      <p class="hint">saveデータ(読み込むよう） の中から、保存するフォルダをクリックしてください。</p>
+      <p class="hint">選んだJSONフォルダ、またはその中のフォルダをクリックしてください。</p>
       <input id="saveFolderSearch" class="file-picker-search" type="search" autocomplete="off" placeholder="フォルダ名で検索">
       <ul id="saveFolderChoices" class="file-picker-list" role="listbox" aria-label="保存先フォルダ"></ul>
       <div class="dialog-actions">
