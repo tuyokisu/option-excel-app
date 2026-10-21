@@ -1,4 +1,7 @@
-
 *.xlsx
+!/該当オプション.xlsx
+!読み込み用excel/**/*.xlsx
+!書き込むエクセル/**/*.xlsx
+test-output/
 .DS_Store
 Thumbs.db
